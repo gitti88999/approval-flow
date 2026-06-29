@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  # מסד הנתונים ומערכת המסרים (Redis)
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
+    networks:
+      - approval-network
+
+networks:
+  approval-network:
+    driver: bridge
