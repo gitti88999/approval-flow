@@ -1,0 +1,10 @@
+apiVersion: dapr.io/v1alpha1
+kind: Subscription
+metadata:
+  name: invoice-subscription
+spec:
+  pubsubname: invoice-pubsub
+  topic: submitted-invoices
+  route: /events/invoice-submissions
+scopes:
+  - approval-agent
