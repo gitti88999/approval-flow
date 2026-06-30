@@ -1,13 +1,57 @@
-version: '3.8'
-
 services:
-  # מסד הנתונים ומערכת המסרים (Redis)
   redis:
     image: "redis:alpine"
-    ports:
-      - "6379:6379"
+    restart: unless-stopped
     networks:
       - approval-network
+  ingestion-service:
+    build: ./services/ingestion-service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    networks:
+      - approval-network
+    depends_on:
+      - ingestion-service-dapr
+  ingestion-service-dapr:
+    image: "daprio/daprd:1.11.0"
+    restart: unless-stopped
+    command: [
+      "./daprd",
+      "-app-id", "ingestion-service",
+      "-app-port", "8000",
+      "-dapr-http-port", "3500",
+      "-components-path", "/components"
+    ]
+    volumes:
+      - ./dapr/components:/components
+    networks:
+      - approval-network
+
+  approval-agent:
+    build: ./services/approval-agent
+    restart: unless-stopped
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    networks:
+      - approval-network
+    depends_on:
+      - redis
+  approval-agent-dapr:
+    image: "daprio/daprd:1.11.0"
+    restart: unless-stopped
+    network_mode: "service:approval-agent"
+    command: [
+      "./daprd",
+      "-app-id", "approval-agent",
+      "-app-port", "8001",
+      "-dapr-http-port", "3501",
+      "-components-path", "/components"
+    ]
+    volumes:
+      - ./dapr/components:/components
+    depends_on:
+      - approval-agent
 
 networks:
   approval-network:
