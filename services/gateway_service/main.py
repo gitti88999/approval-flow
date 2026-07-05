@@ -87,5 +87,11 @@ async def provide_escalation_info(tracking_id: str, request: Request):
     return await invoke(APPROVAL_AGENT_APP_ID, f"escalations/{tracking_id}/info", request)
 
 
+@app.get("/status/{tracking_id}")
+@limiter.limit("120/minute")
+async def get_status(tracking_id: str, request: Request):
+    return await invoke(APPROVAL_AGENT_APP_ID, f"status/{tracking_id}", request)
+
+
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
