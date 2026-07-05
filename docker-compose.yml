@@ -19,8 +19,6 @@ services:
   ingestion-service:
     build: ./services/ingestion_service
     restart: unless-stopped
-    ports:
-      - "8000:8000"
     networks:
       - approval-network
     depends_on:
@@ -33,6 +31,7 @@ services:
       "./daprd",
       "-app-id", "ingestion_service",
       "-app-port", "8000",
+      "-app-channel-address", "ingestion-service",
       "-dapr-http-port", "3500",
       "-components-path", "/components"
     ]
@@ -77,8 +76,6 @@ services:
   payment-service:
     build: ./services/payment_service
     restart: unless-stopped
-    ports:
-      - "8002:8002"
     networks:
       - approval-network
     depends_on:
@@ -102,6 +99,38 @@ services:
       - approval-network
     depends_on:
       - payment-service
+
+  gateway-service:
+    build: ./services/gateway_service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DAPR_RUNTIME_HOST=gateway-dapr
+      - DAPR_HTTP_PORT=3500
+    networks:
+      - approval-network
+    depends_on:
+      - ingestion-service
+      - approval-agent
+
+  gateway-dapr:
+    image: "daprio/daprd:1.11.0"
+    restart: unless-stopped
+    command: [
+      "./daprd",
+      "-app-id", "gateway",
+      "-app-port", "8000",
+      "-app-channel-address", "gateway-service",
+      "-dapr-http-port", "3500",
+      "-components-path", "/components"
+    ]
+    volumes:
+      - ./dapr/components:/components
+    networks:
+      - approval-network
+    depends_on:
+      - gateway-service
 
 networks:
   approval-network:
