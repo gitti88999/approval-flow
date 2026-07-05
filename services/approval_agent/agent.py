@@ -1,14 +1,13 @@
-import os
 import json
 import logging
-import httpx
-from groq import Groq
 import requests
 
 try:
     from .config import settings
+    from . import llm_providers
 except ImportError:
     from config import settings
+    import llm_providers
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +117,6 @@ def process_invoice_evaluation(invoice: dict, tracking_id: str) -> dict:
             "confidence": 1.0,
         }
     # 4. LLM Preparation
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        return {"recommendation": "human_review", "reason": "AI Service unavailable: Missing API Key.", "confidence": 0.0}
-
     rules_text = json.dumps(policy.get("rules", {}), indent=2)
     system_prompt = f"""
     You are an automated corporate financial compliance officer.
@@ -135,23 +130,10 @@ def process_invoice_evaluation(invoice: dict, tracking_id: str) -> dict:
     Return ONLY the raw JSON object.
     """
 
-    # 5. AI Evaluation
+    # 5. AI Evaluation — provider is swappable via LLM_PROVIDER (groq default, stub for CI/offline)
     try:
-        http_client = httpx.Client(trust_env=False)
-        client = Groq(api_key=api_key, http_client=http_client)
-
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Invoice Data:\n{json.dumps(invoice, indent=2)}"}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-            max_tokens=500
-        )
-
-        result = json.loads(completion.choices[0].message.content.strip())
+        provider = llm_providers.get_provider()
+        result = provider.evaluate(system_prompt, invoice)
 
         recommendation = result.get('recommendation', 'unknown').lower()
         reason = result.get('reason', 'no reason provided')
@@ -183,7 +165,7 @@ def process_invoice_evaluation(invoice: dict, tracking_id: str) -> dict:
         return {"recommendation": recommendation, "reason": reason, "confidence": confidence}
 
     except Exception as e:
-        logger.error(f"[Agent LLM Error] Failed evaluating via Groq: {str(e)}")
+        logger.error(f"[Agent LLM Error] Provider evaluation failed: {str(e)}")
         return {
             "id": tracking_id,
             "recommendation": "human_review",
