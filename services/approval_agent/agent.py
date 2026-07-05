@@ -80,49 +80,66 @@ def load_policy():
             
     logger.warning("[Agent] Failed to load policy, using default fallback.")
     return {"min_amount": 0, "max_amount": 500, "auto_approve": True, "autonomy_settings": {"ceiling_usd": 250}}
+
+def log_decision(tracking_id, decision, reason):
+    agent_name = "approval-agent-1"
+    separator = "=" * 60
+    emoji = "✅" if decision == "APPROVE" else "⚠️"
     
+    banner = (
+        f"\n{agent_name:<25} | {emoji} DECISION: {decision}\n"
+        f"{agent_name:<25} | 🆔 TrackingID: {tracking_id}\n"
+        f"{agent_name:<25} | 📝 Reason: {reason}\n"
+        f"{agent_name:<25} | {separator}"
+    )
+    logger.info(banner)
+
 def process_invoice_evaluation(invoice: dict, tracking_id: str) -> dict:
     logger.info(f"[Agent] Starting evaluation for TrackingID: {tracking_id}")
-    
-    # 1. Load Policy (Single point)
+
     policy = load_policy()
     if not policy:
-        return {"recommendation": "human_review", "reason": "Policy configuration missing."}
-    
+        return {"recommendation": "human_review", "reason": "Policy configuration missing.", "confidence": 0.0}
+
     # 2. Hard Stops Validation
     hard_stop_error = validate_hard_stops(invoice, policy)
     if hard_stop_error:
-        logger.info(f"[Agent] Hard stop triggered: {hard_stop_error}")
-        return {"recommendation": "human_review", "reason": f"Hard Stop: {hard_stop_error}"}
-    
+        log_decision(tracking_id, "REJECT", f"Hard Stop: {hard_stop_error}")
+        return {"recommendation": "human_review", "reason": f"Hard Stop: {hard_stop_error}", "confidence": 1.0}
+
     # 3. Autonomy Ceiling Check
     amount = invoice.get("total", 0)
     ceiling = policy.get("autonomy_settings", {}).get("ceiling_usd", 250)
     if amount > ceiling:
-        return {"recommendation": "human_review", "reason": f"Amount {amount} exceeds autonomy ceiling of {ceiling}."}
-
+        log_decision(tracking_id, "REJECT", f"Amount {amount} exceeds autonomy ceiling of {ceiling}.")
+        return {
+            "recommendation": "human_review",
+            "reason": f"Amount {amount} exceeds autonomy ceiling of {ceiling}.",
+            "confidence": 1.0,
+        }
     # 4. LLM Preparation
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        return {"recommendation": "human_review", "reason": "AI Service unavailable: Missing API Key."}
-    
+        return {"recommendation": "human_review", "reason": "AI Service unavailable: Missing API Key.", "confidence": 0.0}
+
     rules_text = json.dumps(policy.get("rules", {}), indent=2)
     system_prompt = f"""
     You are an automated corporate financial compliance officer.
     Evaluate the invoice against the following rules:
     {rules_text}
-    
+
     Output a valid JSON object with:
     1. "recommendation": "approve", "reject", or "human_review".
     2. "reason": Brief explanation of the policy rule applied.
+    3. "confidence": a number between 0.0 and 1.0 expressing how confident you are in this recommendation.
     Return ONLY the raw JSON object.
     """
-    
+
     # 5. AI Evaluation
     try:
         http_client = httpx.Client(trust_env=False)
         client = Groq(api_key=api_key, http_client=http_client)
-        
+
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -133,32 +150,43 @@ def process_invoice_evaluation(invoice: dict, tracking_id: str) -> dict:
             temperature=0.1,
             max_tokens=500
         )
-        
+
         result = json.loads(completion.choices[0].message.content.strip())
-        
-        # Post-AI Guardrail
-        if result.get("recommendation") == "approve" and amount > ceiling:
-            return {"recommendation": "human_review", "reason": "Guardrail violation: AI exceeded manual threshold."}
-        
-        recommendation = result.get('recommendation', 'unknown').upper()
+
+        recommendation = result.get('recommendation', 'unknown').lower()
         reason = result.get('reason', 'no reason provided')
-        
-        emoji = "✅" if recommendation == "APPROVE" else "⚠️"
-        
+        try:
+            confidence = float(result.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        confidence_threshold = policy.get("autonomy_settings", {}).get("confidence_threshold", 0.8)
+
+        # Post-AI Guardrails: the LLM only recommends, the router has the final say.
+        if recommendation == "approve" and amount > ceiling:
+            recommendation = "human_review"
+            reason = "Guardrail violation: AI exceeded manual threshold."
+        elif recommendation == "approve" and confidence < confidence_threshold:
+            recommendation = "human_review"
+            reason = f"Guardrail violation: confidence {confidence:.2f} below threshold {confidence_threshold}."
+
+        emoji = "✅" if recommendation == "approve" else "⚠️"
+
         banner = (
             f"\n{'='*60}\n"
-            f"{emoji} DECISION: {recommendation}\n"
+            f"{emoji} DECISION: {recommendation.upper()}\n"
             f"🆔 TrackingID: {tracking_id}\n"
             f"📝 Reason: {reason}\n"
             f"{'='*60}\n"
         )
         logger.info(banner)
-        
-        return result
-            
+
+        return {"recommendation": recommendation, "reason": reason, "confidence": confidence}
+
     except Exception as e:
         logger.error(f"[Agent LLM Error] Failed evaluating via Groq: {str(e)}")
         return {
+            "id": tracking_id,
             "recommendation": "human_review",
-            "reason": f"Internal evaluation error: {str(e)}"
+            "reason": f"Internal evaluation error: {str(e)}",
+            "confidence": 0.0,
         }

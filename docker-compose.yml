@@ -74,6 +74,35 @@ services:
     depends_on:
       - approval-agent
 
+  payment-service:
+    build: ./services/payment_service
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    networks:
+      - approval-network
+    depends_on:
+      - redis
+      - redis-init
+
+  payment-service-dapr:
+    image: "daprio/daprd:1.11.0"
+    restart: unless-stopped
+    command: [
+      "./daprd",
+      "-app-id", "payment-service",
+      "-app-port", "8002",
+      "-app-channel-address", "payment-service",
+      "-dapr-http-port", "3500",
+      "-components-path", "/components"
+    ]
+    volumes:
+      - ./dapr/components:/components
+    networks:
+      - approval-network
+    depends_on:
+      - payment-service
+
 networks:
   approval-network:
     driver: bridge
