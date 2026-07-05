@@ -10,7 +10,7 @@ from schemas import InvoiceSubmission
 import dapr_client
 
 # Configure clean structured system logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [CorrelationID: %(message)s]')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Initialize the global rate limiter using the client's remote IP address
@@ -35,7 +35,6 @@ app.add_middleware(
 @limiter.limit("60/minute")  # Restricts each unique IP identifier to 60 executions per minute
 async def submit_invoice(invoice: InvoiceSubmission, background_tasks: BackgroundTasks, request: Request):
     # Note: The 'request' object must be injected so slowapi can extract connection routing metadata
-    print("--- DEBUG: RECEIVING REQUEST ---")
     tracking_id = str(uuid.uuid4())
     logger.info(f"{tracking_id} - Processing ingestion for invoice id: {invoice.id}")
     
@@ -55,14 +54,16 @@ async def submit_invoice(invoice: InvoiceSubmission, background_tasks: Backgroun
             detail=str(err)
         )
     
-    # 2. Persist the transaction fingerprint key
-    dapr_client.save_idempotency_state(idempotency_key, invoice.id, tracking_id)
+    # 2. Persist the transaction fingerprint key (must succeed before publishing)
+    if not dapr_client.save_idempotency_state(idempotency_key, invoice.id, tracking_id):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist idempotency key — cannot guarantee deduplication."
+        )
     
     # 3. Queue the event asynchronously using standard Background Tasks
     logger.info(f"Adding publish task for tracking_id: {tracking_id}")
-    # background_tasks.add_task(dapr_client.publish_to_pubsub, tracking_id, invoice)
-    dapr_client.publish_to_pubsub(tracking_id, invoice)
-    logger.info(f"Task added for tracking_id: {tracking_id}")    
+    background_tasks.add_task(dapr_client.publish_to_pubsub, tracking_id, invoice)
     return {
         "status": "Accepted",
         "tracking_id": tracking_id,
@@ -72,4 +73,4 @@ async def submit_invoice(invoice: InvoiceSubmission, background_tasks: Backgroun
 async def subscribe():
     return []
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=False)
