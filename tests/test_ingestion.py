@@ -16,7 +16,7 @@ async def test_publish_to_dapr_pubsub():
     with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value.status_code = 200
         
-        PUB_SUB_URL = "http://127.0.0.1:3501/v1.0/publish/invoice-pubsub/submitted-invoices"
+        PUB_SUB_URL = "http://127.0.0.1:3500/v1.0/publish/invoice-pubsub/submitted-invoices"
         
         import httpx
         async with httpx.AsyncClient() as client:

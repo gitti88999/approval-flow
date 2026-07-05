@@ -1,0 +1,18 @@
+# בסיס קל משקל
+FROM python:3.11-slim
+
+# הגדרת תיקיית עבודה
+WORKDIR /app
+
+# העתקת קבצי הדרישות והתקנתם
+COPY services/approval-agent/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt pytest httpx groq dapr
+
+# העתקת כל הפרויקט לקונטיינר
+COPY . .
+
+# הגדרת PYTHONPATH כדי שפייתון ימצא את תיקיית השורש
+ENV PYTHONPATH=/app
+
+# הרצת הטסטים כברירת מחדל
+CMD ["python", "-m", "pytest", "tests/test_policy.py"]

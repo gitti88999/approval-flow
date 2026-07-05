@@ -24,10 +24,10 @@ def test_dapr_payload_structure():
 
 @pytest.mark.asyncio
 async def test_dapr_connection_url():
-    DAPR_STATE_URL = "http://127.0.0.1:3501/v1.0/state/statestore"
+    DAPR_STATE_URL = "http://127.0.0.1:3500/v1.0/state/statestore"
     
     assert "127.0.0.1" in DAPR_STATE_URL
-    assert "3501" in DAPR_STATE_URL
+    assert "3500" in DAPR_STATE_URL
     assert "statestore" in DAPR_STATE_URL
 
 @pytest.mark.asyncio
@@ -36,7 +36,7 @@ async def test_save_to_dapr_success():
         mock_post.return_value.status_code = 204
         
         async with httpx.AsyncClient() as client:
-            response = await client.post("http://127.0.0.1:3501/v1.0/state/statestore", json=[{"key": "test"}])
+            response = await client.post("http://127.0.0.1:3500/v1.0/state/statestore", json=[{"key": "test"}])
             
         assert response.status_code == 204
         mock_post.assert_called_once()

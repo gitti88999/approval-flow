@@ -6,13 +6,13 @@ import agent
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-DAPR_STATE_URL = "http://127.0.0.1:3501/v1.0/state/statestore"
+DAPR_STATE_URL = f"http://{os.getenv('DAPR_HTTP_HOST', 'localhost')}:{os.getenv('DAPR_HTTP_PORT', '3500')}/v1.0/state/statestore"
 
 app = FastAPI(title="Approval Agent Service", version="1.0")
 
 @app.get("/dapr/subscribe")
 async def subscribe():
+    logger.info("!!! DAPR IS ASKING FOR SUBSCRIPTIONS !!!") # הוסיפי את זה
     return [
         {
             "pubsubname": "invoice-pubsub",
@@ -23,7 +23,9 @@ async def subscribe():
 
 @app.post("/events/invoice-submissions", status_code=status.HTTP_200_OK)
 async def handle_invoice_event(request: Request):
+    logger.info("!!! DAPR EVENT ARRIVED AT AGENT !!!") # זה יעזור לנו לדעת אם הבעיה היא בטופיק או בלוגיקה
     event_envelope = await request.json()
+    logger.info(f"[Agent Router] Received event: {event_envelope}")
     event_data = event_envelope.get("data", {})
     
     invoice = event_data.get("invoice", event_data) if isinstance(event_data, dict) else event_data

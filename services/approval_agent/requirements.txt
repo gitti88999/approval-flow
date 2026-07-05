@@ -6,3 +6,6 @@ groq==0.9.0
 httpx==0.27.0
 pytest
 pytest-asyncio
+dapr
+dapr-ext-grpc
+pydantic-settings
