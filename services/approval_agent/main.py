@@ -87,7 +87,7 @@ async def handle_invoice_event(request: Request):
                 "tracking_id": tracking_id,
                 "recommendation": evaluation_result.get("recommendation", "human_review"),
                 "reason": evaluation_result.get("reason", ""),
-                "evaluated_at": "2026-06-30"
+                "confidence": evaluation_result.get("confidence"),
             }
         }
     ]
