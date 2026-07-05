@@ -18,12 +18,12 @@ def validate_hard_stops(invoice: dict, policy: dict) -> str | None:
     # 1. Receipt presence (hard binary signal)
     if "GLOBAL-RECEIPT" in hard_stops:
         if not invoice.get("receiptPresent", False):
-            return "GLOBAL-RECEIPT violation"
+            return "Missing mandatory receipt (GLOBAL-RECEIPT)"
 
     # 2. Vendor trust (binary signal)
     if "GLOBAL-VENDOR" in hard_stops:
         if not invoice.get("vendorKnown", False):
-            return "GLOBAL-VENDOR violation"
+            return "Unknown/unapproved vendor (GLOBAL-VENDOR)"
 
     # 3. Math integrity (strict structural check only)
     if "GLOBAL-MATH" in hard_stops:

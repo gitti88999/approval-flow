@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["main", "dev"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install service dependencies
+        run: |
+          pip install -r services/ingestion_service/requirements.txt
+          pip install -r services/approval_agent/requirements.txt
+          pip install -r services/payment_service/requirements.txt
+          pip install -r services/gateway_service/requirements.txt
+
+      - name: Lint (fail on syntax errors / undefined names)
+        run: |
+          pip install ruff
+          ruff check --select=E9,F821,F822,F823 services tests
+
+      - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pytest tests/ -v
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose config
+        run: docker compose config --quiet
+        env:
+          GROQ_API_KEY: dummy-key-for-ci
+
+      - name: Build all service images
+        run: docker compose build
+        env:
+          GROQ_API_KEY: dummy-key-for-ci
