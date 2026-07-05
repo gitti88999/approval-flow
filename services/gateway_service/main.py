@@ -10,10 +10,12 @@ from slowapi.util import get_remote_address
 
 try:
     from .config import APPROVAL_AGENT_APP_ID, DAPR_INVOKE_BASE_URL, INGESTION_APP_ID
+    from .logging_setup import configure_logging, set_correlation_id
 except ImportError:
     from config import APPROVAL_AGENT_APP_ID, DAPR_INVOKE_BASE_URL, INGESTION_APP_ID
+    from logging_setup import configure_logging, set_correlation_id
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+configure_logging("gateway")
 logger = logging.getLogger(__name__)
 
 # key_style="endpoint" buckets by (client, route function) rather than the literal resolved
@@ -78,18 +80,21 @@ async def list_escalations(request: Request):
 @app.post("/escalations/{tracking_id}/decide")
 @limiter.limit("30/minute")
 async def decide_escalation(tracking_id: str, request: Request):
+    set_correlation_id(tracking_id)
     return await invoke(APPROVAL_AGENT_APP_ID, f"escalations/{tracking_id}/decide", request)
 
 
 @app.post("/escalations/{tracking_id}/info")
 @limiter.limit("30/minute")
 async def provide_escalation_info(tracking_id: str, request: Request):
+    set_correlation_id(tracking_id)
     return await invoke(APPROVAL_AGENT_APP_ID, f"escalations/{tracking_id}/info", request)
 
 
 @app.get("/status/{tracking_id}")
 @limiter.limit("120/minute")
 async def get_status(tracking_id: str, request: Request):
+    set_correlation_id(tracking_id)
     return await invoke(APPROVAL_AGENT_APP_ID, f"status/{tracking_id}", request)
 
 

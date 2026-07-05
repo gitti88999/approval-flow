@@ -5,10 +5,12 @@ import uvicorn
 
 try:
     from . import dapr_client
+    from .logging_setup import configure_logging, set_correlation_id
 except ImportError:
     import dapr_client
+    from logging_setup import configure_logging, set_correlation_id
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+configure_logging("payment-service")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Payment Service", version="1.0")
@@ -41,10 +43,11 @@ async def handle_payment(request: Request):
     event_envelope = await request.json()
     event_data = event_envelope.get("data", event_envelope)
     tracking_id = event_data.get("tracking_id", event_envelope.get("id", "UNKNOWN-ID"))
+    set_correlation_id(tracking_id)
     invoice = event_data.get("invoice", {})
     amount = invoice.get("total", 0)
 
-    logger.info(f"{tracking_id} - Payment saga triggered, amount={amount}")
+    logger.info(f"Payment saga triggered, amount={amount}")
 
     try:
         existing = dapr_client.get_payment_state(tracking_id)

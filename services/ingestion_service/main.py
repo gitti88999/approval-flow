@@ -8,9 +8,9 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from schemas import InvoiceSubmission
 import dapr_client
+from logging_setup import configure_logging, set_correlation_id
 
-# Configure clean structured system logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+configure_logging("ingestion-service")
 logger = logging.getLogger(__name__)
 
 # Initialize the global rate limiter using the client's remote IP address
@@ -36,7 +36,8 @@ app.add_middleware(
 async def submit_invoice(invoice: InvoiceSubmission, background_tasks: BackgroundTasks, request: Request):
     # Note: The 'request' object must be injected so slowapi can extract connection routing metadata
     tracking_id = str(uuid.uuid4())
-    logger.info(f"{tracking_id} - Processing ingestion for invoice id: {invoice.id}")
+    set_correlation_id(tracking_id)
+    logger.info(f"Processing ingestion for invoice id: {invoice.id}")
     
     # Generate unique business transaction fingerprint
     idempotency_key = f"dup-{invoice.vendor}-{invoice.invoiceNumber}-{invoice.total}"
@@ -69,6 +70,11 @@ async def submit_invoice(invoice: InvoiceSubmission, background_tasks: Backgroun
         "tracking_id": tracking_id,
         "message": "Invoice safely ingested and registered for validation rules workflow."
     }
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 @app.get("/dapr/subscribe")
 async def subscribe():
     return []

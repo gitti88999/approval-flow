@@ -6,16 +6,24 @@ import httpx
 
 try:
     from . import agent, escalation
+    from .logging_setup import configure_logging, set_correlation_id
 except ImportError:
     import agent
     import escalation
+    from logging_setup import configure_logging, set_correlation_id
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+configure_logging("approval-agent")
 logger = logging.getLogger(__name__)
 DAPR_STATE_URL = f"http://{os.getenv('DAPR_HTTP_HOST', 'localhost')}:{os.getenv('DAPR_HTTP_PORT', '3500')}/v1.0/state/statestore"
 DAPR_PUBSUB_PUBLISH_URL = f"http://{os.getenv('DAPR_HTTP_HOST', 'localhost')}:{os.getenv('DAPR_HTTP_PORT', '3500')}/v1.0/publish/invoice-pubsub/payment-required"
 
 app = FastAPI(title="Approval Agent Service", version="1.0")
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 
 async def get_evaluation(tracking_id: str):
     async with httpx.AsyncClient() as client:
@@ -58,6 +66,7 @@ async def handle_payment_outcome(request: Request):
     tracking_id = event_data.get("tracking_id")
     if not tracking_id:
         return {"status": "SUCCESS"}
+    set_correlation_id(tracking_id)
 
     record = await get_evaluation(tracking_id) or {"tracking_id": tracking_id}
     record["payment_status"] = event_data.get("status")
@@ -68,15 +77,15 @@ async def handle_payment_outcome(request: Request):
 
 @app.post("/events/invoice-submissions", status_code=status.HTTP_200_OK)
 async def handle_invoice_event(request: Request):
-    logger.info("!!! DAPR EVENT ARRIVED AT AGENT !!!")
     event_envelope = await request.json()
-    logger.info(f"[Agent Router] Received event: {event_envelope}")
     event_data = event_envelope.get("data", {})
-    
+
     invoice = event_data.get("invoice", event_data) if isinstance(event_data, dict) else event_data
     tracking_id = event_data.get("tracking_id", event_envelope.get("id", "UNKNOWN-ID"))
-        
-    logger.info(f"[Agent Router] Digested Payload - TrackingID: {tracking_id}")
+    set_correlation_id(tracking_id)
+
+    logger.info(f"[Agent Router] Received event: {event_envelope}")
+    logger.info("[Agent Router] Digested Payload")
     
     evaluation_result = agent.process_invoice_evaluation(invoice, tracking_id)
     
@@ -153,6 +162,7 @@ async def get_escalations():
 @app.post("/escalations/{tracking_id}/decide")
 async def decide_escalation(tracking_id: str, decision: EscalationDecision):
     """F5 — approve, reject, or send back for more info in one action."""
+    set_correlation_id(tracking_id)
     if decision.action not in {"approve", "reject", "request_info"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="action must be approve, reject, or request_info")
     try:
@@ -167,6 +177,7 @@ async def decide_escalation(tracking_id: str, decision: EscalationDecision):
 async def provide_escalation_info(tracking_id: str, payload: EscalationInfo):
     """F5 — the submitter answers a request_info; the item resumes exactly where it paused, back
     in the approver queue."""
+    set_correlation_id(tracking_id)
     try:
         return escalation.submit_additional_info(tracking_id, payload.info)
     except LookupError as e:
@@ -179,6 +190,7 @@ async def provide_escalation_info(tracking_id: str, payload: EscalationInfo):
 async def get_status(tracking_id: str):
     """F2 — a plain-language status a submitter can check, combining the agent's evaluation,
     any human decision, and the payment outcome."""
+    set_correlation_id(tracking_id)
     evaluation = await get_evaluation(tracking_id)
     esc = escalation.get_escalation(tracking_id)
 
