@@ -12,7 +12,7 @@ app = FastAPI(title="Approval Agent Service", version="1.0")
 
 @app.get("/dapr/subscribe")
 async def subscribe():
-    logger.info("!!! DAPR IS ASKING FOR SUBSCRIPTIONS !!!") # הוסיפי את זה
+    logger.info("!!! DAPR IS ASKING FOR SUBSCRIPTIONS !!!") 
     return [
         {
             "pubsubname": "invoice-pubsub",
@@ -23,7 +23,7 @@ async def subscribe():
 
 @app.post("/events/invoice-submissions", status_code=status.HTTP_200_OK)
 async def handle_invoice_event(request: Request):
-    logger.info("!!! DAPR EVENT ARRIVED AT AGENT !!!") # זה יעזור לנו לדעת אם הבעיה היא בטופיק או בלוגיקה
+    logger.info("!!! DAPR EVENT ARRIVED AT AGENT !!!")
     event_envelope = await request.json()
     logger.info(f"[Agent Router] Received event: {event_envelope}")
     event_data = event_envelope.get("data", {})

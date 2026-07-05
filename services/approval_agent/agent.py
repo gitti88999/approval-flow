@@ -5,7 +5,6 @@ import httpx
 from groq import Groq
 import requests
 
-# Handle both: running as module (Docker: CWD = service dir) and running from repo root (tests)
 try:
     from .config import settings
 except ImportError:
@@ -141,16 +140,9 @@ def process_invoice_evaluation(invoice: dict, tracking_id: str) -> dict:
         if result.get("recommendation") == "approve" and amount > ceiling:
             return {"recommendation": "human_review", "reason": "Guardrail violation: AI exceeded manual threshold."}
         
-        # recommendation = result.get('recommendation', 'unknown')
-        # reason = result.get('reason', 'no reason provided')
-        # # logger.info(f"[Agent Evaluation Complete] TrackingID: {tracking_id} | Recommendation: {result.get('recommendation')}")
-        # # return result
-        # logger.info(f"\n{'='*60}\n📢 DECISION: HUMAN_REVIEW (HARD STOP)\n🆔 TrackingID: {tracking_id}\n🚫 Reason: {reason}\n{'='*60}")        
-        # return result
         recommendation = result.get('recommendation', 'unknown').upper()
         reason = result.get('reason', 'no reason provided')
         
-        # בניית באנר דינמי לפי התוצאה
         emoji = "✅" if recommendation == "APPROVE" else "⚠️"
         
         banner = (
