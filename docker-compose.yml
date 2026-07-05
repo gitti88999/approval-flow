@@ -44,7 +44,7 @@ services:
     build: ./services/approval_agent
     restart: unless-stopped
     environment:
-      - GROQ_API_KEY=${GROQ_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
       - DAPR_HTTP_HOST=approval-agent-dapr
       - DAPR_HTTP_PORT=3500
     networks:
@@ -56,6 +56,10 @@ services:
   approval-agent-dapr:
     image: "daprio/daprd:1.11.0"
     restart: unless-stopped
+    environment:
+      # Read by the "local.env" Dapr secret store — the secret store reads from the sidecar
+      # process's own environment, not the app container's, so it's set here rather than above.
+      - GROQ_API_KEY=${GROQ_API_KEY}
     command: [
       "./daprd",
       "-app-id", "approval-agent",

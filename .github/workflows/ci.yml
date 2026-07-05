@@ -31,6 +31,8 @@ jobs:
       - name: Run tests
         env:
           PYTHONPATH: ${{ github.workspace }}
+          # Stub LLM provider: no API key or network calls needed in CI (per assignment guidance).
+          LLM_PROVIDER: stub
         run: pytest tests/ -v
 
   docker-build:
