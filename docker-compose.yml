@@ -132,6 +132,19 @@ services:
     depends_on:
       - gateway-service
 
+  ui:
+    build:
+      context: ./services/ui
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    networks:
+      - approval-network
+    depends_on:
+      - gateway-service
+
 networks:
   approval-network:
     driver: bridge

@@ -3,8 +3,12 @@ import os
 from fastapi import FastAPI, HTTPException, Request, status
 from pydantic import BaseModel
 import httpx
-import agent
-import escalation
+
+try:
+    from . import agent, escalation
+except ImportError:
+    import agent
+    import escalation
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -13,16 +17,54 @@ DAPR_PUBSUB_PUBLISH_URL = f"http://{os.getenv('DAPR_HTTP_HOST', 'localhost')}:{o
 
 app = FastAPI(title="Approval Agent Service", version="1.0")
 
+async def get_evaluation(tracking_id: str):
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{DAPR_STATE_URL}/invoice_evaluation:{tracking_id}")
+    if response.status_code == 200 and response.text.strip():
+        return response.json()
+    return None
+
+
+async def save_evaluation(tracking_id: str, record: dict) -> bool:
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            DAPR_STATE_URL, json=[{"key": f"invoice_evaluation:{tracking_id}", "value": record}]
+        )
+    return response.status_code in (200, 204)
+
+
 @app.get("/dapr/subscribe")
 async def subscribe():
-    logger.info("!!! DAPR IS ASKING FOR SUBSCRIPTIONS !!!") 
+    logger.info("!!! DAPR IS ASKING FOR SUBSCRIPTIONS !!!")
     return [
         {
             "pubsubname": "invoice-pubsub",
             "topic": "submitted-invoices",
             "route": "/events/invoice-submissions"
+        },
+        {
+            "pubsubname": "invoice-pubsub",
+            "topic": "invoice-completed",
+            "route": "/events/payment-outcome"
         }
     ]
+
+
+@app.post("/events/payment-outcome", status_code=status.HTTP_200_OK)
+async def handle_payment_outcome(request: Request):
+    """Records the payment service's final outcome so GET /status can report it (F2)."""
+    event_envelope = await request.json()
+    event_data = event_envelope.get("data", event_envelope)
+    tracking_id = event_data.get("tracking_id")
+    if not tracking_id:
+        return {"status": "SUCCESS"}
+
+    record = await get_evaluation(tracking_id) or {"tracking_id": tracking_id}
+    record["payment_status"] = event_data.get("status")
+    record["payment_reason"] = event_data.get("reason")
+    await save_evaluation(tracking_id, record)
+    logger.info(f"[Agent] Recorded payment outcome for TrackingID: {tracking_id}: {event_data.get('status')}")
+    return {"status": "SUCCESS"}
 
 @app.post("/events/invoice-submissions", status_code=status.HTTP_200_OK)
 async def handle_invoice_event(request: Request):
@@ -131,3 +173,62 @@ async def provide_escalation_info(tracking_id: str, payload: EscalationInfo):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except escalation.EscalationError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@app.get("/status/{tracking_id}")
+async def get_status(tracking_id: str):
+    """F2 — a plain-language status a submitter can check, combining the agent's evaluation,
+    any human decision, and the payment outcome."""
+    evaluation = await get_evaluation(tracking_id)
+    esc = escalation.get_escalation(tracking_id)
+
+    if evaluation is None and esc is None:
+        return {
+            "tracking_id": tracking_id,
+            "stage": "processing",
+            "message": "Your submission is still being processed. Check back in a moment.",
+            "recommendation": None,
+            "reason": "",
+            "confidence": None,
+            "payment_status": None,
+        }
+
+    source = esc or evaluation
+    recommendation = source.get("recommendation", "unknown")
+    reason = source.get("reason", "")
+    confidence = source.get("confidence")
+    payment_status = (evaluation or {}).get("payment_status")
+    payment_reason = (evaluation or {}).get("payment_reason")
+    esc_status = esc.get("status") if esc else None
+
+    if esc_status == "info_requested":
+        stage = "awaiting_info"
+        message = f"A reviewer requested more information: {esc.get('approver_notes', '')}"
+    elif esc_status == "pending":
+        stage = "escalated"
+        message = f"Awaiting human review. Reason: {reason}"
+    elif esc_status == "rejected":
+        stage = "rejected"
+        message = f"Rejected by {esc.get('approver', 'a reviewer')}: {esc.get('approver_notes') or reason}"
+    elif payment_status == "paid":
+        stage = "paid"
+        message = "Approved and payment completed."
+    elif payment_status == "failed":
+        stage = "payment_failed"
+        message = f"Approved, but payment failed: {payment_reason}"
+    elif recommendation == "approve" or esc_status == "approved":
+        stage = "approved_pending_payment"
+        message = "Approved; payment is processing."
+    else:
+        stage = "processing"
+        message = "Your submission is still being processed."
+
+    return {
+        "tracking_id": tracking_id,
+        "stage": stage,
+        "message": message,
+        "recommendation": recommendation,
+        "reason": reason,
+        "confidence": confidence,
+        "payment_status": payment_status,
+    }
