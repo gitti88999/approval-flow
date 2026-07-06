@@ -100,7 +100,10 @@ screen does this automatically and stores the session in the browser.
 
 ## Testing
 
-**Unit/integration tests** (mocked Dapr calls, no live stack needed):
+**Unit/integration tests** (mocked Dapr calls, no live stack needed) — organized to mirror
+`services/` (`tests/approval_agent/`, `tests/ingestion_service/`, `tests/payment_service/`,
+`tests/gateway_service/`), plus `tests/shared/` for the one cross-cutting test (structured
+logging, which every service implements identically):
 
 ```bash
 pip install -r services/ingestion_service/requirements.txt \
@@ -129,5 +132,5 @@ is at or above `0.80` **and** no hard-stop rule applies (unknown vendor, missing
 mismatch, etc. — see `config/policy.json`). Both the ceiling and confidence checks are enforced
 by deterministic code in `approval-agent`, not by trusting the model — see
 ["The autonomy ceiling"](ARCHITECTURE.md#the-autonomy-ceiling--where-its-enforced) in
-ARCHITECTURE.md for exactly where and how, and `tests/test_ceiling_proof.py` for the test that
-proves it holds even when the model is forced to recommend approval.
+ARCHITECTURE.md for exactly where and how, and `tests/approval_agent/test_ceiling_proof.py` for
+the test that proves it holds even when the model is forced to recommend approval.

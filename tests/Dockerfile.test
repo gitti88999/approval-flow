@@ -9,4 +9,4 @@ COPY . .
 
 ENV PYTHONPATH=/app
 
-CMD ["python", "-m", "pytest", "tests/test_policy.py"]
+CMD ["python", "-m", "pytest", "tests/approval_agent/test_policy.py"]

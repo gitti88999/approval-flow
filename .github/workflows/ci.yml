@@ -26,7 +26,7 @@ jobs:
       - name: Lint (fail on syntax errors / undefined names)
         run: |
           pip install ruff
-          ruff check --select=E9,F821,F822,F823 services tests
+          ruff check --select=E9,F821,F822,F823 services tests scripts
 
       - name: Run tests
         env:

@@ -6,7 +6,9 @@ import requests
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Target server URL pointing to our Docker Compose ingestion port
+# NOTE: stale since the gateway (M6) and auth (N1) were added — ingestion-service is no longer
+# host-exposed, and /submit now requires a Bearer token. This URL/payload need updating (point at
+# the gateway, log in first, attach Authorization header) before this script will work again.
 URL = "http://ingestion-service-dapr:8000/submit"
 
 # Baseline compliant payload matched to the structural schema expectations
