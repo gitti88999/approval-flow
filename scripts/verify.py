@@ -16,6 +16,22 @@ POLL_TIMEOUT = 25
 POLL_INTERVAL = 1.5
 
 results = []
+_auth_headers = {}
+
+
+def _login_as_bootstrapped_admin() -> dict:
+    """Admin accounts can't be self-registered (N1 locks that down — see auth.py), so the script
+    logs in as the admin the gateway bootstraps on first startup instead. Admin can both submit
+    and decide, so the script only needs the one token."""
+    username = os.getenv("DEFAULT_ADMIN_USERNAME", "admin")
+    password = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123")
+
+    token_response = requests.post(
+        f"{GATEWAY_URL}/auth/token", json={"username": username, "password": password}, timeout=10
+    )
+    token_response.raise_for_status()
+    token = token_response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
 
 def check(name, passed, detail=""):
@@ -58,7 +74,7 @@ def base_invoice(total=40.0, vendor=None, invoice_number=None, notes=None, recei
 
 
 def submit(invoice):
-    response = requests.post(f"{GATEWAY_URL}/submit", json=invoice, timeout=10)
+    response = requests.post(f"{GATEWAY_URL}/submit", json=invoice, headers=_auth_headers, timeout=10)
     return response
 
 
@@ -66,7 +82,7 @@ def poll_status(tracking_id, target_stages, timeout=POLL_TIMEOUT):
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
-        response = requests.get(f"{GATEWAY_URL}/status/{tracking_id}", timeout=5)
+        response = requests.get(f"{GATEWAY_URL}/status/{tracking_id}", headers=_auth_headers, timeout=5)
         if response.status_code == 200:
             last = response.json()
             if last.get("stage") in target_stages:
@@ -76,13 +92,14 @@ def poll_status(tracking_id, target_stages, timeout=POLL_TIMEOUT):
 
 
 def get_escalations():
-    return requests.get(f"{GATEWAY_URL}/escalations", timeout=10).json()
+    return requests.get(f"{GATEWAY_URL}/escalations", headers=_auth_headers, timeout=10).json()
 
 
 def decide(tracking_id, action, approver="verify-script@example.com", notes=""):
     return requests.post(
         f"{GATEWAY_URL}/escalations/{tracking_id}/decide",
         json={"action": action, "approver": approver, "notes": notes},
+        headers=_auth_headers,
         timeout=10,
     )
 
@@ -175,11 +192,72 @@ def guard_prompt_injection_does_not_flip_decision():
     check("Anti-cheese: 'approve me' note does not flip decision", passed, str(status))
 
 
+def guard_unauthenticated_request_is_rejected():
+    response = requests.post(f"{GATEWAY_URL}/submit", json=base_invoice(), timeout=10)
+    check("Anti-cheese: unauthenticated request is rejected", response.status_code == 401, str(response.status_code))
+
+
+def guard_pending_registration_requires_admin_approval():
+    username = f"verify-pending-{uuid.uuid4().hex[:8]}"
+    password = "verify-password-123"
+
+    register_response = requests.post(
+        f"{GATEWAY_URL}/auth/register",
+        json={"username": username, "password": password, "role": "submitter"},
+        timeout=10,
+    )
+    if register_response.status_code != 201:
+        check("Pending accounts require admin approval", False, f"register returned {register_response.status_code}")
+        return
+
+    login_before = requests.post(
+        f"{GATEWAY_URL}/auth/token", json={"username": username, "password": password}, timeout=10
+    )
+    if login_before.status_code != 401:
+        check("Pending accounts require admin approval", False, f"pending account could log in: {login_before.status_code}")
+        return
+
+    approve_response = requests.post(
+        f"{GATEWAY_URL}/auth/users/{username}/decide",
+        json={"approve": True},
+        headers=_auth_headers,
+        timeout=10,
+    )
+    if approve_response.status_code != 200:
+        check("Pending accounts require admin approval", False, f"admin approve returned {approve_response.status_code}")
+        return
+
+    login_after = requests.post(
+        f"{GATEWAY_URL}/auth/token", json={"username": username, "password": password}, timeout=10
+    )
+    check(
+        "Pending accounts require admin approval",
+        login_after.status_code == 200,
+        f"post-approval login: {login_after.status_code}",
+    )
+
+
+def guard_self_service_admin_registration_is_rejected():
+    response = requests.post(
+        f"{GATEWAY_URL}/auth/register",
+        json={"username": f"verify-mallory-{uuid.uuid4().hex[:8]}", "password": "whatever123", "role": "admin"},
+        timeout=10,
+    )
+    check("Anti-cheese: self-service admin registration is rejected", response.status_code == 409, str(response.status_code))
+
+
 def main():
+    global _auth_headers
+
     print(f"Verifying stack at {GATEWAY_URL} ...")
     if not wait_for_gateway():
         print("Gateway never became healthy — aborting.")
         sys.exit(1)
+
+    guard_unauthenticated_request_is_rejected()
+    guard_self_service_admin_registration_is_rejected()
+    _auth_headers = _login_as_bootstrapped_admin()
+    guard_pending_registration_requires_admin_approval()
 
     first_tracking_id = journey_auto_approve()
     journey_escalate_and_resume()

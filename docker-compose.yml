@@ -110,6 +110,8 @@ services:
     environment:
       - DAPR_RUNTIME_HOST=gateway-dapr
       - DAPR_HTTP_PORT=3500
+      - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin123}
     networks:
       - approval-network
     depends_on:
@@ -119,6 +121,10 @@ services:
   gateway-dapr:
     image: "daprio/daprd:1.11.0"
     restart: unless-stopped
+    environment:
+      # Read by the "local.env" Dapr secret store, same pattern as GROQ_API_KEY on
+      # approval-agent-dapr — the secret store reads the sidecar's own environment.
+      - JWT_SECRET=${JWT_SECRET}
     command: [
       "./daprd",
       "-app-id", "gateway",
