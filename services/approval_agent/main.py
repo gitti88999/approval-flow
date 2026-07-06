@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from fastapi import FastAPI, HTTPException, Request, status
@@ -5,17 +6,17 @@ from pydantic import BaseModel
 import httpx
 
 try:
-    from . import agent, escalation
+    from . import agent, escalation, outbox
     from .logging_setup import configure_logging, set_correlation_id
 except ImportError:
     import agent
     import escalation
+    import outbox
     from logging_setup import configure_logging, set_correlation_id
 
 configure_logging("approval-agent")
 logger = logging.getLogger(__name__)
 DAPR_STATE_URL = f"http://{os.getenv('DAPR_HTTP_HOST', 'localhost')}:{os.getenv('DAPR_HTTP_PORT', '3500')}/v1.0/state/statestore"
-DAPR_PUBSUB_PUBLISH_URL = f"http://{os.getenv('DAPR_HTTP_HOST', 'localhost')}:{os.getenv('DAPR_HTTP_PORT', '3500')}/v1.0/publish/invoice-pubsub/payment-required"
 
 app = FastAPI(title="Approval Agent Service", version="1.0")
 
@@ -23,6 +24,23 @@ app = FastAPI(title="Approval Agent Service", version="1.0")
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.on_event("startup")
+async def start_outbox_dispatcher():
+    """N3 — background poller that delivers events the outbox has durably recorded but not yet
+    published, retrying on every tick until each one succeeds."""
+    async def loop():
+        while True:
+            try:
+                dispatched = await asyncio.to_thread(outbox.dispatch_pending)
+                if dispatched:
+                    logger.info(f"[Outbox] Dispatched {dispatched} pending event(s).")
+            except Exception as e:
+                logger.error(f"[Outbox] Dispatcher tick failed: {e}")
+            await asyncio.sleep(2)
+
+    asyncio.create_task(loop())
 
 
 async def get_evaluation(tracking_id: str):
@@ -88,43 +106,45 @@ async def handle_invoice_event(request: Request):
     logger.info("[Agent Router] Digested Payload")
     
     evaluation_result = agent.process_invoice_evaluation(invoice, tracking_id)
-    
-    state_payload = [
-        {
-            "key": f"invoice_evaluation:{tracking_id}",
-            "value": {
-                "tracking_id": tracking_id,
-                "recommendation": evaluation_result.get("recommendation", "human_review"),
-                "reason": evaluation_result.get("reason", ""),
-                "confidence": evaluation_result.get("confidence"),
-            }
-        }
-    ]
-    
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(DAPR_STATE_URL, json=state_payload)
-            if response.status_code in [200, 204]:
-                logger.info(f"[Agent DB] Successfully persisted evaluation for TrackingID: {tracking_id}")
-            else:
-                logger.error(f"[Agent DB] Failed. Status: {response.status_code}, Response: {response.text}")
-    except Exception as e:
-        logger.error(f"[Agent DB] Error: {str(e)}")
+
+    state_item = {
+        "key": f"invoice_evaluation:{tracking_id}",
+        "value": {
+            "tracking_id": tracking_id,
+            "recommendation": evaluation_result.get("recommendation", "human_review"),
+            "reason": evaluation_result.get("reason", ""),
+            "confidence": evaluation_result.get("confidence"),
+        },
+    }
 
     if evaluation_result.get("recommendation") == "approve":
+        # Outbox pattern (N3): persist the evaluation and the payment-required event in one
+        # atomic Dapr state transaction, so the intent to publish can never be silently lost even
+        # if the direct publish below fails or the process dies — the background dispatcher will
+        # still deliver it. Previously this was a plain "save state, then publish" pair: if the
+        # publish call failed, the evaluation was already marked approved with no record that
+        # payment was ever supposed to happen — a real, silent lost-money bug.
+        try:
+            outbox.enqueue_with_state(
+                [state_item],
+                "invoice-pubsub",
+                "payment-required",
+                {"tracking_id": tracking_id, "invoice": invoice},
+            )
+            logger.info(f"[Agent Router] Persisted evaluation and enqueued payment-required for TrackingID: {tracking_id}")
+        except outbox.OutboxError as e:
+            logger.error(f"[Agent Router] Failed to persist evaluation/outbox for TrackingID: {tracking_id}: {e}")
+    else:
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    DAPR_PUBSUB_PUBLISH_URL,
-                    json={"tracking_id": tracking_id, "invoice": invoice}
-                )
+                response = await client.post(DAPR_STATE_URL, json=[state_item])
                 if response.status_code in [200, 204]:
-                    logger.info(f"[Agent Router] Published payment-required event for TrackingID: {tracking_id}")
+                    logger.info(f"[Agent DB] Successfully persisted evaluation for TrackingID: {tracking_id}")
                 else:
-                    logger.error(f"[Agent Router] Failed to publish payment-required event. Status: {response.status_code}, Response: {response.text}")
+                    logger.error(f"[Agent DB] Failed. Status: {response.status_code}, Response: {response.text}")
         except Exception as e:
-            logger.error(f"[Agent Router] Error publishing payment-required event: {str(e)}")
-    else:
+            logger.error(f"[Agent DB] Error: {str(e)}")
+
         # Anything the agent doesn't clear for auto-approval pauses here for a human — the agent
         # never auto-rejects on its own; a human makes the final call (F6).
         try:
@@ -171,6 +191,8 @@ async def decide_escalation(tracking_id: str, decision: EscalationDecision):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except escalation.EscalationError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except outbox.OutboxError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @app.post("/escalations/{tracking_id}/info")

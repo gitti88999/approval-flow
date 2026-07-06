@@ -13,10 +13,12 @@ from slowapi.util import get_remote_address
 
 try:
     from . import auth
+    from .bulkhead import Bulkhead
     from .config import APPROVAL_AGENT_APP_ID, DAPR_INVOKE_BASE_URL, INGESTION_APP_ID
     from .logging_setup import configure_logging, set_correlation_id
 except ImportError:
     import auth
+    from bulkhead import Bulkhead
     from config import APPROVAL_AGENT_APP_ID, DAPR_INVOKE_BASE_URL, INGESTION_APP_ID
     from logging_setup import configure_logging, set_correlation_id
 
@@ -53,30 +55,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Bulkhead (N3): one bucket of concurrency per downstream app, so a slow/overloaded
+# ingestion-service can't also starve calls to approval-agent (or vice versa) by consuming all of
+# the gateway's outbound capacity. Full is a fast, explicit 503, not an unbounded queue.
+_BULKHEAD_LIMIT = int(os.getenv("BULKHEAD_MAX_CONCURRENT_PER_SERVICE", "20"))
+_bulkheads = {
+    INGESTION_APP_ID: Bulkhead(_BULKHEAD_LIMIT),
+    APPROVAL_AGENT_APP_ID: Bulkhead(_BULKHEAD_LIMIT),
+}
+
 
 async def invoke(app_id: str, method_path: str, request: Request) -> Response:
     """Forwards the incoming request to a backend service over Dapr's synchronous
     service-invocation building block — the gateway never talks to services directly."""
-    url = f"{DAPR_INVOKE_BASE_URL}/{app_id}/method/{method_path}"
-    body = await request.body()
+    bulkhead = _bulkheads.get(app_id)
+    if bulkhead is not None and not await bulkhead.try_enter():
+        logger.warning(f"Bulkhead full for '{app_id}' ({bulkhead.in_use}/{_BULKHEAD_LIMIT} in use)")
+        raise HTTPException(
+            status_code=503, detail=f"Too many concurrent requests to '{app_id}' — try again shortly."
+        )
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            downstream = await client.request(
-                request.method,
-                url,
-                content=body,
-                headers={"Content-Type": request.headers.get("content-type", "application/json")},
-            )
-    except httpx.RequestError as e:
-        logger.error(f"Failed to reach {app_id} for {method_path}: {e}")
-        raise HTTPException(status_code=502, detail=f"Upstream service '{app_id}' unreachable: {e}")
+        url = f"{DAPR_INVOKE_BASE_URL}/{app_id}/method/{method_path}"
+        body = await request.body()
 
-    return Response(
-        content=downstream.content,
-        status_code=downstream.status_code,
-        media_type=downstream.headers.get("content-type"),
-    )
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                downstream = await client.request(
+                    request.method,
+                    url,
+                    content=body,
+                    headers={"Content-Type": request.headers.get("content-type", "application/json")},
+                )
+        except httpx.RequestError as e:
+            logger.error(f"Failed to reach {app_id} for {method_path}: {e}")
+            raise HTTPException(status_code=502, detail=f"Upstream service '{app_id}' unreachable: {e}")
+
+        return Response(
+            content=downstream.content,
+            status_code=downstream.status_code,
+            media_type=downstream.headers.get("content-type"),
+        )
+    finally:
+        if bulkhead is not None:
+            await bulkhead.exit()
 
 
 @app.get("/health")

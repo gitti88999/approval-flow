@@ -136,3 +136,18 @@ by deterministic code in `approval-agent`, not by trusting the model — see
 ["The autonomy ceiling"](ARCHITECTURE.md#the-autonomy-ceiling--where-its-enforced) in
 ARCHITECTURE.md for exactly where and how, and `tests/approval_agent/test_ceiling_proof.py` for
 the test that proves it holds even when the model is forced to recommend approval.
+
+## Reliability extras (N3)
+
+- **Transactional outbox** — `approval-agent` never does a plain "save state, then publish"
+  sequence for the `payment-required` event. Both the state write and a durable record of the
+  event to publish are committed in one atomic Dapr state transaction (`outbox.py`); a background
+  poller (`dispatch_pending`, ticking every 2s) delivers it and retries on failure instead of
+  ever losing it. This closed two real bugs found while building it: a publish failure after the
+  auto-approve state write, and the same gap in the approver's "approve" decision — both used to
+  mark the item approved with no record that a payment was ever supposed to happen.
+- **Bulkhead** — the gateway (`bulkhead.py`) caps concurrent in-flight requests per downstream
+  service (`BULKHEAD_MAX_CONCURRENT_PER_SERVICE`, default 20) so a slow/overloaded
+  `ingestion-service` can't also starve calls to `approval-agent` by consuming all outbound
+  capacity. A full bulkhead returns `503` immediately rather than queueing. Verified live by
+  firing 60 concurrent submissions: exactly 20 succeeded and 40 got `503`.

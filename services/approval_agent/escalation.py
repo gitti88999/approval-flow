@@ -6,14 +6,15 @@ import requests
 
 try:
     from .config import settings
+    from . import outbox
 except ImportError:
     from config import settings
+    import outbox
 
 logger = logging.getLogger(__name__)
 
 DAPR_BASE_URL = f"http://{settings.dapr_http_host}:{settings.dapr_http_port}/v1.0"
 DAPR_STATE_URL = f"{DAPR_BASE_URL}/state/statestore"
-DAPR_PUBSUB_PUBLISH_URL = f"{DAPR_BASE_URL}/publish/invoice-pubsub/payment-required"
 
 QUEUE_KEY = "escalation_queue"
 OPEN_STATUSES = {"pending", "info_requested"}
@@ -96,17 +97,6 @@ def list_open_escalations() -> List[dict]:
     return items
 
 
-def _publish_payment_required(tracking_id: str, invoice: dict) -> None:
-    response = requests.post(
-        DAPR_PUBSUB_PUBLISH_URL, json={"tracking_id": tracking_id, "invoice": invoice}, timeout=5
-    )
-    if response.status_code not in (200, 204):
-        logger.error(
-            f"{tracking_id} - Failed to publish payment-required after approval decision. "
-            f"Status: {response.status_code}"
-        )
-
-
 def resolve_decision(tracking_id: str, action: str, approver: str, notes: str) -> dict:
     """Applies an approver's decision (F5). 'approve' resumes the workflow exactly where the agent
     paused it, by publishing the same payment-required event the auto-approve path would have sent.
@@ -123,11 +113,20 @@ def resolve_decision(tracking_id: str, action: str, approver: str, notes: str) -
     # same call is safe: publishing again is deduped by payment-service, and removing an
     # already-removed id from the queue is a no-op.
     if action == "approve":
-        _publish_payment_required(tracking_id, record["invoice"])
+        # Outbox pattern (N3): the escalation record's "approved" status and the
+        # payment-required event are committed in one atomic Dapr state transaction, so a
+        # publish failure can never leave the item marked approved with no record that payment
+        # was ever supposed to happen — outbox.dispatch_pending() delivers it, retrying until
+        # it succeeds. Previously this called publish directly and only logged on failure.
+        updated_record = {**record, "status": "approved", "approver": approver, "approver_notes": notes}
+        outbox.enqueue_with_state(
+            [{"key": _escalation_key(tracking_id), "value": updated_record}],
+            "invoice-pubsub",
+            "payment-required",
+            {"tracking_id": tracking_id, "invoice": record["invoice"]},
+        )
         _mutate_queue(lambda q: [t for t in q if t != tracking_id])
-        record.update({"status": "approved", "approver": approver, "approver_notes": notes})
-        _save_escalation(tracking_id, record)
-        return record
+        return updated_record
 
     if action == "reject":
         _mutate_queue(lambda q: [t for t in q if t != tracking_id])

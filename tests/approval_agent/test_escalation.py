@@ -45,7 +45,9 @@ def test_list_open_escalations_filters_by_status():
     assert [item["tracking_id"] for item in open_items] == ["T1"]
 
 
-def test_resolve_decision_approve_publishes_payment_required():
+def test_resolve_decision_approve_enqueues_outbox_event():
+    """resolve_decision no longer publishes directly — it hands the escalation-record update and
+    the payment-required event to the outbox (N3) as one atomic unit."""
     record_resp = MagicMock(status_code=200, text="x")
     record_resp.json.return_value = {
         "tracking_id": "T1",
@@ -60,16 +62,18 @@ def test_resolve_decision_approve_publishes_payment_required():
         return record_resp
 
     with patch("services.approval_agent.escalation.requests.get", side_effect=fake_get), \
-         patch("services.approval_agent.escalation.requests.post", return_value=_resp(204)) as mock_post:
+         patch("services.approval_agent.escalation.requests.post", return_value=_resp(204)), \
+         patch.object(escalation.outbox, "enqueue_with_state") as mock_enqueue:
         result = escalation.resolve_decision("T1", "approve", "mgr@example.com", "looks fine")
 
     assert result["status"] == "approved"
-    published = [
-        c for c in mock_post.call_args_list
-        if c.args and c.args[0].endswith("/publish/invoice-pubsub/payment-required")
-    ]
-    assert len(published) == 1
-    assert published[0].kwargs["json"]["tracking_id"] == "T1"
+    mock_enqueue.assert_called_once()
+    state_items, pubsub_name, topic, payload = mock_enqueue.call_args.args
+    assert state_items[0]["key"] == "escalation:T1"
+    assert state_items[0]["value"]["status"] == "approved"
+    assert pubsub_name == "invoice-pubsub"
+    assert topic == "payment-required"
+    assert payload == {"tracking_id": "T1", "invoice": {"total": 100}}
 
 
 def test_resolve_decision_on_already_resolved_raises():
