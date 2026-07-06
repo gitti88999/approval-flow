@@ -158,10 +158,10 @@ terminal state (`paid`/`compensated`) is a no-op, verified by `tests/test_paymen
 the ceiling, the function returns `human_review` immediately — the provider is never invoked, so
 there is nothing for a compromised or overly-agreeable model to override. A second guardrail
 after the LLM call also downgrades an `approve` recommendation that is somehow over ceiling or
-below the confidence threshold, as defense in depth. `tests/test_ceiling_proof.py` proves this
-by injecting a provider that always recommends `approve` at confidence `1.0` and asserting the
-router still returns `human_review` for an over-ceiling amount — and that the provider was never
-even called.
+below the confidence threshold, as defense in depth.
+`tests/approval_agent/test_ceiling_proof.py` proves this by injecting a provider that always
+recommends `approve` at confidence `1.0` and asserting the router still returns `human_review`
+for an over-ceiling amount — and that the provider was never even called.
 
 ## Idempotency
 
@@ -174,6 +174,51 @@ even called.
 - **Retried decisions**: `approval-agent`'s `resolve_decision` only flips an escalation's status
   to a terminal value as its last step, after the idempotent side effects (publish, queue
   removal) — so retrying a failed decision call is safe.
+
+## Reliability: outbox and bulkhead (N3)
+
+`approval-agent` publishes `payment-required` in two places — the auto-approve path
+(`main.py::handle_invoice_event`) and an approver's "approve" decision
+(`escalation.py::resolve_decision`). Both used to do a plain "save state, then call Dapr's
+publish API" sequence: if the publish call failed or the process crashed in between, the item was
+already marked approved with **no durable record that a payment was ever supposed to happen** —
+a silent, unrecoverable loss. `outbox.py` closes this with the transactional outbox pattern:
+
+1. `enqueue_with_state` writes the primary state change (the evaluation record, or the
+   escalation's "approved" status) **and** a durable outbox record for the event, in one atomic
+   Dapr state transaction (`POST /v1.0/state/statestore/transaction`). If this call succeeds,
+   both exist; if it fails, neither does.
+2. A background poller (`dispatch_pending`, started on `approval-agent`'s startup event, ticking
+   every 2s) publishes every pending outbox record. A publish failure just leaves it `pending`
+   for the next tick instead of losing it; success marks it `dispatched` and removes it from the
+   `outbox_queue` index.
+
+The gateway also caps concurrent in-flight requests per downstream service (`bulkhead.py`,
+default 20) — a classic bulkhead: an overloaded `ingestion-service` can't also starve
+`approval-agent` calls by consuming all of the gateway's outbound capacity, and a full bulkhead
+fails fast with `503` rather than queueing unbounded work.
+
+## Observability (N4)
+
+Dapr auto-instruments its own sidecar-mediated hops (service invocation, pub/sub delivery) once
+tracing is enabled (`dapr/components/tracing-config.yaml`, exporting to Jaeger over OTLP). The
+app extends that same trace across the two gaps Dapr can't see into on its own:
+
+- **The app's own outbound Dapr calls** — `tracing_setup.py` (per service) extracts the
+  `traceparent` Dapr embeds in an incoming CloudEvent envelope (or forwards as a header on a
+  service-invocation call), and re-injects it on the next outbound call, so state writes and
+  publishes nest under the same trace instead of starting a new one.
+- **The LLM call** — `agent.py` wraps the provider call in a child span tagged with the
+  correlation id, nested under whichever span is currently active when `process_invoice_evaluation`
+  runs.
+
+One wrinkle: the outbox dispatcher (above) publishes on its own timer, so there's no "currently
+active" span when it fires. `enqueue_with_state` captures the traceparent at *enqueue* time and
+stores it on the outbox record itself; `dispatch_pending` reads it back for that publish.
+
+Result, verified live: submitting one invoice produces a single Jaeger trace with 12 spans across
+all 4 services — `gateway -> ingestion-service -> approval-agent (-> llm.evaluate) ->
+payment-service -> approval-agent` — viewable at http://localhost:16686.
 
 ## Configuration & secrets
 

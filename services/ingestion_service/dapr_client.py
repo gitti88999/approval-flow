@@ -38,12 +38,17 @@ def save_idempotency_state(idempotency_key: str, invoice_id: str, tracking_id: s
         logger.error(f"{tracking_id} - Inability to write transaction signature state: {str(e)}")
         return False
 
-def publish_to_pubsub(tracking_id: str, invoice: InvoiceSubmission):
-    """Publishes the structured event payload (including tracking_id) within the background tasks context."""
+def publish_to_pubsub(tracking_id: str, invoice: InvoiceSubmission, traceparent: str = None):
+    """Publishes the structured event payload (including tracking_id) within the background tasks
+    context. traceparent (N4), if given, is the incoming /submit request's own W3C trace header —
+    forwarding it here means the async submitted-invoices delivery continues the same distributed
+    trace Dapr started for the sync gateway -> ingestion-service call, instead of starting a new,
+    disconnected one."""
     payload = invoice.model_dump()
     payload["tracking_id"] = tracking_id
+    headers = {"traceparent": traceparent} if traceparent else {}
     try:
-        response = requests.post(DAPR_PUBSUB_URL, json=payload, timeout=2.0)
+        response = requests.post(DAPR_PUBSUB_URL, json=payload, headers=headers, timeout=2.0)
         if response.status_code in [200, 204]:
             logger.info(f"{tracking_id} - Successfully published invoice {invoice.id} to Dapr pub/sub.")
         else:

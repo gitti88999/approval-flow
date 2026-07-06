@@ -6,11 +6,14 @@ import uvicorn
 try:
     from . import dapr_client
     from .logging_setup import configure_logging, set_correlation_id
+    from .tracing_setup import configure_tracing, extract_context
 except ImportError:
     import dapr_client
     from logging_setup import configure_logging, set_correlation_id
+    from tracing_setup import configure_tracing, extract_context
 
 configure_logging("payment-service")
+tracer = configure_tracing("payment-service")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Payment Service", version="1.0")
@@ -47,58 +50,64 @@ async def handle_payment(request: Request):
     invoice = event_data.get("invoice", {})
     amount = invoice.get("total", 0)
 
-    logger.info(f"Payment saga triggered, amount={amount}")
+    # N4 — nests under the same distributed trace the original submission started (Dapr embeds
+    # the traceparent from approval-agent's outbox dispatch in this event's envelope), so the
+    # saga's steps show up in the same end-to-end trace as everything upstream.
+    parent_ctx = extract_context(event_envelope.get("traceparent"))
+    with tracer.start_as_current_span("handle_payment_required", context=parent_ctx) as span:
+        span.set_attribute("correlation_id", tracking_id)
+        logger.info(f"Payment saga triggered, amount={amount}")
 
-    try:
-        existing = dapr_client.get_payment_state(tracking_id)
-    except dapr_client.DaprInfrastructureError as e:
-        logger.error(f"{tracking_id} - {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        try:
+            existing = dapr_client.get_payment_state(tracking_id)
+        except dapr_client.DaprInfrastructureError as e:
+            logger.error(f"{tracking_id} - {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
-    if existing and existing.get("status") in TERMINAL_STATES:
-        logger.info(f"{tracking_id} - Duplicate payment-required event ignored, already {existing['status']}")
-        return {"status": "SUCCESS", "note": "already processed"}
+        if existing and existing.get("status") in TERMINAL_STATES:
+            logger.info(f"{tracking_id} - Duplicate payment-required event ignored, already {existing['status']}")
+            return {"status": "SUCCESS", "note": "already processed"}
 
-    # Step 1: reserve. This must be persisted before we attempt the charge, and it must
-    # never be left in "reserved" once the saga concludes — success commits it to "paid",
-    # failure below compensates it to "compensated".
-    try:
-        dapr_client.save_payment_state(
-            tracking_id, {"status": "reserved", "amount": amount, "tracking_id": tracking_id}
-        )
-    except dapr_client.DaprInfrastructureError as e:
-        logger.error(f"{tracking_id} - Failed to record reservation: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-    # Step 2: attempt the charge.
-    try:
-        charge_payment(invoice)
-    except Exception as e:
-        logger.warning(f"{tracking_id} - Charge failed ({e}), compensating reservation")
+        # Step 1: reserve. This must be persisted before we attempt the charge, and it must
+        # never be left in "reserved" once the saga concludes — success commits it to "paid",
+        # failure below compensates it to "compensated".
         try:
             dapr_client.save_payment_state(
-                tracking_id,
-                {"status": "compensated", "amount": amount, "tracking_id": tracking_id, "reason": str(e)},
+                tracking_id, {"status": "reserved", "amount": amount, "tracking_id": tracking_id}
             )
-        except dapr_client.DaprInfrastructureError as state_err:
-            logger.error(f"{tracking_id} - Failed to persist compensation, retrying via redelivery: {state_err}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(state_err))
+        except dapr_client.DaprInfrastructureError as e:
+            logger.error(f"{tracking_id} - Failed to record reservation: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
-        dapr_client.publish_outcome(tracking_id, "failed", str(e))
-        return {"status": "SUCCESS", "outcome": "failed"}
+        # Step 2: attempt the charge.
+        try:
+            charge_payment(invoice)
+        except Exception as e:
+            logger.warning(f"{tracking_id} - Charge failed ({e}), compensating reservation")
+            try:
+                dapr_client.save_payment_state(
+                    tracking_id,
+                    {"status": "compensated", "amount": amount, "tracking_id": tracking_id, "reason": str(e)},
+                )
+            except dapr_client.DaprInfrastructureError as state_err:
+                logger.error(f"{tracking_id} - Failed to persist compensation, retrying via redelivery: {state_err}")
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(state_err))
 
-    # Step 3: commit.
-    try:
-        dapr_client.save_payment_state(
-            tracking_id, {"status": "paid", "amount": amount, "tracking_id": tracking_id}
-        )
-    except dapr_client.DaprInfrastructureError as e:
-        logger.error(f"{tracking_id} - Failed to persist paid state after a successful charge: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+            dapr_client.publish_outcome(tracking_id, "failed", str(e))
+            return {"status": "SUCCESS", "outcome": "failed"}
 
-    dapr_client.publish_outcome(tracking_id, "paid", "Payment completed successfully")
-    logger.info(f"{tracking_id} - Payment completed successfully")
-    return {"status": "SUCCESS", "outcome": "paid"}
+        # Step 3: commit.
+        try:
+            dapr_client.save_payment_state(
+                tracking_id, {"status": "paid", "amount": amount, "tracking_id": tracking_id}
+            )
+        except dapr_client.DaprInfrastructureError as e:
+            logger.error(f"{tracking_id} - Failed to persist paid state after a successful charge: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+        dapr_client.publish_outcome(tracking_id, "paid", "Payment completed successfully")
+        logger.info(f"{tracking_id} - Payment completed successfully")
+        return {"status": "SUCCESS", "outcome": "paid"}
 
 
 if __name__ == "__main__":

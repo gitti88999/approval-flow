@@ -46,3 +46,41 @@ async def test_invoke_raises_502_when_upstream_unreachable():
             await gateway_main.invoke("approval-agent", "escalations", _request(method="GET", body=b""))
 
     assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_invoke_releases_bulkhead_slot_after_failure():
+    """A failed call must still free its bulkhead slot (via the try/finally), or repeated
+    upstream failures would eventually wedge the gateway shut for that service."""
+    import httpx
+    from fastapi import HTTPException
+
+    bulkhead = gateway_main._bulkheads["approval-agent"]
+    assert bulkhead.in_use == 0
+
+    with patch("services.gateway_service.main.httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client.request.side_effect = httpx.ConnectError("boom")
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+        with pytest.raises(HTTPException):
+            await gateway_main.invoke("approval-agent", "escalations", _request(method="GET", body=b""))
+
+    assert bulkhead.in_use == 0
+
+
+@pytest.mark.asyncio
+async def test_invoke_returns_503_when_bulkhead_is_full():
+    from fastapi import HTTPException
+
+    bulkhead = gateway_main._bulkheads["ingestion_service"]
+    original_max = bulkhead._max
+    bulkhead._max = 1
+    assert await bulkhead.try_enter()  # fill the (now single) slot
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await gateway_main.invoke("ingestion_service", "submit", _request())
+        assert exc_info.value.status_code == 503
+    finally:
+        await bulkhead.exit()
+        bulkhead._max = original_max

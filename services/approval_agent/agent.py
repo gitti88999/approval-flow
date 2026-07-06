@@ -4,10 +4,11 @@ import requests
 
 try:
     from .config import settings
-    from . import llm_providers
+    from . import llm_providers, tracing_setup
 except ImportError:
     from config import settings
     import llm_providers
+    import tracing_setup
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,14 @@ def process_invoice_evaluation(invoice: dict, tracking_id: str) -> dict:
     # 5. AI Evaluation — provider is swappable via LLM_PROVIDER (groq default, stub for CI/offline)
     try:
         provider = llm_providers.get_provider()
-        result = provider.evaluate(system_prompt, invoice)
+        tracer = tracing_setup.get_tracer()
+        # N4 — nests under whatever span is currently active (handle_invoice_submission, set up
+        # by main.py), so the LLM call shows up as part of the same end-to-end trace.
+        with tracer.start_as_current_span("llm.evaluate") as span:
+            span.set_attribute("correlation_id", tracking_id)
+            span.set_attribute("llm.provider", provider.__class__.__name__)
+            result = provider.evaluate(system_prompt, invoice)
+            span.set_attribute("llm.recommendation", str(result.get("recommendation")))
 
         recommendation = result.get('recommendation', 'unknown').lower()
         reason = result.get('reason', 'no reason provided')

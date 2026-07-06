@@ -18,6 +18,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component/sequence/payment-f
 - **Docker Compose** to run the whole system with one command
 - **GitHub Actions** for CI (lint + tests + a docker-compose build check)
 - **pytest** / **pytest-asyncio** for automated tests
+- **OpenTelemetry + Jaeger** for distributed tracing (N4) — one trace spans the whole submit ->
+  evaluate -> pay journey across all 4 services, including the LLM call, tagged with the
+  correlation id. Metrics: every Dapr sidecar already exposes a Prometheus-format `/metrics`
+  endpoint on `:9090` inside the network.
 
 ## System diagram
 
@@ -50,9 +54,11 @@ saga/compensation flow, are in [ARCHITECTURE.md](ARCHITECTURE.md).)
    docker compose up -d --build
    ```
 
-3. Open the UI at http://localhost:3000 and sign in (see "Authentication" below), or call the
-   API directly at http://localhost:8000 (e.g. `POST /submit`, `GET /status/{tracking_id}`,
-   `GET /escalations`) — every route except `/health` and `/auth/token` requires a bearer token.
+3. Open the UI at http://localhost:3000 and sign in (see "Authentication" below), or explore/call
+   the API directly — **http://localhost:8000/docs** is an interactive Swagger UI (D4) grouped
+   into Auth/Submissions/Escalations/Status, with example request bodies for every route. Get a
+   token from `POST /auth/token`, click **Authorize**, paste it in, and "Try it out" works
+   end-to-end. Every route except `/health` and `/auth/*` requires that bearer token.
 4. Tear down with `docker compose down`.
 
 Only the gateway (`:8000`) and the UI (`:3000`) are exposed to the host — every other service is
@@ -100,7 +106,10 @@ screen does this automatically and stores the session in the browser.
 
 ## Testing
 
-**Unit/integration tests** (mocked Dapr calls, no live stack needed):
+**Unit/integration tests** (mocked Dapr calls, no live stack needed) — organized to mirror
+`services/` (`tests/approval_agent/`, `tests/ingestion_service/`, `tests/payment_service/`,
+`tests/gateway_service/`), plus `tests/shared/` for the one cross-cutting test (structured
+logging, which every service implements identically):
 
 ```bash
 pip install -r services/ingestion_service/requirements.txt \
@@ -129,5 +138,40 @@ is at or above `0.80` **and** no hard-stop rule applies (unknown vendor, missing
 mismatch, etc. — see `config/policy.json`). Both the ceiling and confidence checks are enforced
 by deterministic code in `approval-agent`, not by trusting the model — see
 ["The autonomy ceiling"](ARCHITECTURE.md#the-autonomy-ceiling--where-its-enforced) in
-ARCHITECTURE.md for exactly where and how, and `tests/test_ceiling_proof.py` for the test that
-proves it holds even when the model is forced to recommend approval.
+ARCHITECTURE.md for exactly where and how, and `tests/approval_agent/test_ceiling_proof.py` for
+the test that proves it holds even when the model is forced to recommend approval.
+
+## Reliability extras (N3)
+
+- **Transactional outbox** — `approval-agent` never does a plain "save state, then publish"
+  sequence for the `payment-required` event. Both the state write and a durable record of the
+  event to publish are committed in one atomic Dapr state transaction (`outbox.py`); a background
+  poller (`dispatch_pending`, ticking every 2s) delivers it and retries on failure instead of
+  ever losing it. This closed two real bugs found while building it: a publish failure after the
+  auto-approve state write, and the same gap in the approver's "approve" decision — both used to
+  mark the item approved with no record that a payment was ever supposed to happen.
+- **Bulkhead** — the gateway (`bulkhead.py`) caps concurrent in-flight requests per downstream
+  service (`BULKHEAD_MAX_CONCURRENT_PER_SERVICE`, default 20) so a slow/overloaded
+  `ingestion-service` can't also starve calls to `approval-agent` by consuming all outbound
+  capacity. A full bulkhead returns `503` immediately rather than queueing. Verified live by
+  firing 60 concurrent submissions: exactly 20 succeeded and 40 got `503`.
+
+## Observability (N4)
+
+Open **http://localhost:16686** (Jaeger) after submitting anything through the UI or API — search
+for the `gateway` service and you'll find one continuous trace for the whole journey:
+`gateway -> ingestion-service -> approval-agent (handle_invoice_submission -> llm.evaluate,
+tagged with the correlation id) -> payment-service -> approval-agent again` for the payment
+outcome. Dapr auto-traces its own sidecar-mediated hops (service invocation, pub/sub delivery);
+the app explicitly continues that same trace across the two places Dapr can't see into on its
+own — the app's own outbound calls to its sidecar, and the LLM call — by extracting the
+`traceparent` Dapr embeds in the CloudEvent envelope (or forwards as an HTTP header) and
+re-injecting it on the next outbound call (`tracing_setup.py`, duplicated per service like
+`logging_setup.py`). The one asynchronous wrinkle: `approval-agent`'s outbox dispatcher publishes
+on its own timer, disconnected from the original request's span, so the trace context is captured
+at *enqueue* time and stored on the outbox record itself rather than read from "whatever's
+currently active" when the dispatcher later fires.
+
+Metrics: every Dapr sidecar already exposes a Prometheus-format `/metrics` endpoint on `:9090`
+inside the compose network (no extra configuration needed) — not scraped/visualized by a
+dedicated service here, to keep the stack's memory footprint down.
