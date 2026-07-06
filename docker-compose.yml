@@ -31,7 +31,8 @@ services:
       "-app-port", "8000",
       "-app-channel-address", "ingestion-service",
       "-dapr-http-port", "3500",
-      "-components-path", "/components"
+      "-components-path", "/components",
+      "-config", "/components/tracing-config.yaml"
     ]
     volumes:
       - ./dapr/components:/components
@@ -66,7 +67,8 @@ services:
       "-app-port", "8001",
       "-app-channel-address", "approval-agent",
       "-dapr-http-port", "3500",
-      "-components-path", "/components"
+      "-components-path", "/components",
+      "-config", "/components/tracing-config.yaml"
     ]
     volumes:
       - ./dapr/components:/components
@@ -93,7 +95,8 @@ services:
       "-app-port", "8002",
       "-app-channel-address", "payment-service",
       "-dapr-http-port", "3500",
-      "-components-path", "/components"
+      "-components-path", "/components",
+      "-config", "/components/tracing-config.yaml"
     ]
     volumes:
       - ./dapr/components:/components
@@ -131,7 +134,8 @@ services:
       "-app-port", "8000",
       "-app-channel-address", "gateway-service",
       "-dapr-http-port", "3500",
-      "-components-path", "/components"
+      "-components-path", "/components",
+      "-config", "/components/tracing-config.yaml"
     ]
     volumes:
       - ./dapr/components:/components
@@ -152,6 +156,16 @@ services:
       - approval-network
     depends_on:
       - gateway-service
+
+  jaeger:
+    image: "jaegertracing/all-in-one:1.57"
+    restart: unless-stopped
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"
+    networks:
+      - approval-network
 
 networks:
   approval-network:

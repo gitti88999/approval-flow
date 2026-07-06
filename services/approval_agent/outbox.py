@@ -7,8 +7,10 @@ import requests
 
 try:
     from .config import settings
+    from . import tracing_setup
 except ImportError:
     from config import settings
+    import tracing_setup
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,9 @@ def enqueue_with_state(state_items: List[dict], pubsub_name: str, topic: str, pa
     if the publish call fails or the process dies in between, even though the state write already
     succeeded. Here, if the transaction commits, the intent to publish is guaranteed to survive —
     dispatch_pending() (run by a background poller) delivers it, retrying until it succeeds."""
+    # N4 — the dispatcher may publish this many seconds from now, on a background poller with no
+    # relation to this request's span, so the current trace context has to be captured now and
+    # stored on the record itself rather than relied on later.
     outbox_id = str(uuid.uuid4())
     record = {
         "id": outbox_id,
@@ -78,6 +83,7 @@ def enqueue_with_state(state_items: List[dict], pubsub_name: str, topic: str, pa
         "payload": payload,
         "status": "pending",
         "attempts": 0,
+        "traceparent": tracing_setup.inject_headers().get("traceparent"),
     }
     operations = [{"operation": "upsert", "request": item} for item in state_items]
     operations.append({"operation": "upsert", "request": {"key": _outbox_key(outbox_id), "value": record}})
@@ -104,8 +110,9 @@ def dispatch_pending(max_batch: int = 20) -> int:
             continue
 
         url = f"{DAPR_BASE_URL}/publish/{record['pubsub_name']}/{record['topic']}"
+        headers = {"traceparent": record["traceparent"]} if record.get("traceparent") else {}
         try:
-            response = requests.post(url, json=record["payload"], timeout=5)
+            response = requests.post(url, json=record["payload"], headers=headers, timeout=5)
             if response.status_code not in (200, 204):
                 raise OutboxError(f"Publish returned {response.status_code}")
         except Exception as e:

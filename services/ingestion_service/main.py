@@ -64,7 +64,10 @@ async def submit_invoice(invoice: InvoiceSubmission, background_tasks: Backgroun
     
     # 3. Queue the event asynchronously using standard Background Tasks
     logger.info(f"Adding publish task for tracking_id: {tracking_id}")
-    background_tasks.add_task(dapr_client.publish_to_pubsub, tracking_id, invoice)
+    # N4 — captured now (not read inside the background task) since the incoming request's
+    # headers are still reliably available here, before the response is sent.
+    traceparent = request.headers.get("traceparent")
+    background_tasks.add_task(dapr_client.publish_to_pubsub, tracking_id, invoice, traceparent)
     return {
         "status": "Accepted",
         "tracking_id": tracking_id,

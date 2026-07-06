@@ -18,6 +18,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component/sequence/payment-f
 - **Docker Compose** to run the whole system with one command
 - **GitHub Actions** for CI (lint + tests + a docker-compose build check)
 - **pytest** / **pytest-asyncio** for automated tests
+- **OpenTelemetry + Jaeger** for distributed tracing (N4) — one trace spans the whole submit ->
+  evaluate -> pay journey across all 4 services, including the LLM call, tagged with the
+  correlation id. Metrics: every Dapr sidecar already exposes a Prometheus-format `/metrics`
+  endpoint on `:9090` inside the network.
 
 ## System diagram
 
@@ -151,3 +155,23 @@ the test that proves it holds even when the model is forced to recommend approva
   `ingestion-service` can't also starve calls to `approval-agent` by consuming all outbound
   capacity. A full bulkhead returns `503` immediately rather than queueing. Verified live by
   firing 60 concurrent submissions: exactly 20 succeeded and 40 got `503`.
+
+## Observability (N4)
+
+Open **http://localhost:16686** (Jaeger) after submitting anything through the UI or API — search
+for the `gateway` service and you'll find one continuous trace for the whole journey:
+`gateway -> ingestion-service -> approval-agent (handle_invoice_submission -> llm.evaluate,
+tagged with the correlation id) -> payment-service -> approval-agent again` for the payment
+outcome. Dapr auto-traces its own sidecar-mediated hops (service invocation, pub/sub delivery);
+the app explicitly continues that same trace across the two places Dapr can't see into on its
+own — the app's own outbound calls to its sidecar, and the LLM call — by extracting the
+`traceparent` Dapr embeds in the CloudEvent envelope (or forwards as an HTTP header) and
+re-injecting it on the next outbound call (`tracing_setup.py`, duplicated per service like
+`logging_setup.py`). The one asynchronous wrinkle: `approval-agent`'s outbox dispatcher publishes
+on its own timer, disconnected from the original request's span, so the trace context is captured
+at *enqueue* time and stored on the outbox record itself rather than read from "whatever's
+currently active" when the dispatcher later fires.
+
+Metrics: every Dapr sidecar already exposes a Prometheus-format `/metrics` endpoint on `:9090`
+inside the compose network (no extra configuration needed) — not scraped/visualized by a
+dedicated service here, to keep the stack's memory footprint down.

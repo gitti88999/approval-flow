@@ -198,6 +198,28 @@ default 20) — a classic bulkhead: an overloaded `ingestion-service` can't also
 `approval-agent` calls by consuming all of the gateway's outbound capacity, and a full bulkhead
 fails fast with `503` rather than queueing unbounded work.
 
+## Observability (N4)
+
+Dapr auto-instruments its own sidecar-mediated hops (service invocation, pub/sub delivery) once
+tracing is enabled (`dapr/components/tracing-config.yaml`, exporting to Jaeger over OTLP). The
+app extends that same trace across the two gaps Dapr can't see into on its own:
+
+- **The app's own outbound Dapr calls** — `tracing_setup.py` (per service) extracts the
+  `traceparent` Dapr embeds in an incoming CloudEvent envelope (or forwards as a header on a
+  service-invocation call), and re-injects it on the next outbound call, so state writes and
+  publishes nest under the same trace instead of starting a new one.
+- **The LLM call** — `agent.py` wraps the provider call in a child span tagged with the
+  correlation id, nested under whichever span is currently active when `process_invoice_evaluation`
+  runs.
+
+One wrinkle: the outbox dispatcher (above) publishes on its own timer, so there's no "currently
+active" span when it fires. `enqueue_with_state` captures the traceparent at *enqueue* time and
+stores it on the outbox record itself; `dispatch_pending` reads it back for that publish.
+
+Result, verified live: submitting one invoice produces a single Jaeger trace with 12 spans across
+all 4 services — `gateway -> ingestion-service -> approval-agent (-> llm.evaluate) ->
+payment-service -> approval-agent` — viewable at http://localhost:16686.
+
 ## Configuration & secrets
 
 - `config/policy.json` is the canonical policy document; its values are seeded into the Dapr

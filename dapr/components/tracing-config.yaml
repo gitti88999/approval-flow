@@ -1,0 +1,11 @@
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: approvalflow-config
+spec:
+  tracing:
+    samplingRate: "1"
+    otel:
+      endpointAddress: "jaeger:4317"
+      isSecure: false
+      protocol: "grpc"

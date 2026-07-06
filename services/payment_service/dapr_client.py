@@ -5,8 +5,10 @@ import requests
 
 try:
     from .config import DAPR_STATE_URL, DAPR_PUBSUB_PUBLISH_URL
+    from . import tracing_setup
 except ImportError:
     from config import DAPR_STATE_URL, DAPR_PUBSUB_PUBLISH_URL
+    import tracing_setup
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +44,9 @@ def save_payment_state(tracking_id: str, payload: dict) -> None:
 def publish_outcome(tracking_id: str, outcome_status: str, reason: str) -> None:
     """Publishes the final payment outcome for downstream notification/status consumers."""
     payload = {"tracking_id": tracking_id, "status": outcome_status, "reason": reason}
+    headers = tracing_setup.inject_headers()
     try:
-        response = requests.post(DAPR_PUBSUB_PUBLISH_URL, json=payload, timeout=2.0)
+        response = requests.post(DAPR_PUBSUB_PUBLISH_URL, json=payload, headers=headers, timeout=2.0)
         if response.status_code not in (200, 204):
             logger.error(f"{tracking_id} - Failed to publish payment outcome. Status: {response.status_code}")
     except requests.exceptions.RequestException as e:
