@@ -5,12 +5,38 @@ import Typography from '@mui/material/Typography'
 import Tabs from '@mui/material/Tabs'
 import Tab from '@mui/material/Tab'
 import Container from '@mui/material/Container'
-import Box from '@mui/material/Box'
+import Chip from '@mui/material/Chip'
+import Button from '@mui/material/Button'
+import Stack from '@mui/material/Stack'
 import SubmitterView from './SubmitterView.jsx'
 import ApproverView from './ApproverView.jsx'
+import AdminView from './AdminView.jsx'
+import Login from './Login.jsx'
+import { getSession, clearSession } from './api.js'
 
 export default function App() {
-  const [tab, setTab] = useState(0)
+  const [session, setSession] = useState(getSession())
+  const [tab, setTab] = useState(session?.role === 'approver' ? 1 : 0)
+
+  if (!session) {
+    return (
+      <Login
+        onLoggedIn={(newSession) => {
+          setSession(newSession)
+          setTab(newSession.role === 'approver' ? 1 : 0)
+        }}
+      />
+    )
+  }
+
+  const handleLogout = () => {
+    clearSession()
+    setSession(null)
+  }
+
+  const canSubmit = session.role === 'submitter' || session.role === 'admin'
+  const canApprove = session.role === 'approver' || session.role === 'admin'
+  const canAdmin = session.role === 'admin'
 
   return (
     <>
@@ -20,18 +46,24 @@ export default function App() {
             ApprovalFlow
           </Typography>
           <Tabs value={tab} onChange={(_, v) => setTab(v)} textColor="inherit" indicatorColor="secondary">
-            <Tab label="Submitter" />
-            <Tab label="Approver" />
+            {canSubmit && <Tab label="Submitter" value={0} />}
+            {canApprove && <Tab label="Approver" value={1} />}
+            {canAdmin && <Tab label="Admin" value={2} />}
           </Tabs>
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ ml: 2 }}>
+            <Chip label={`${session.username} (${session.role})`} size="small" color="secondary" />
+            <Button color="inherit" size="small" onClick={handleLogout}>
+              Logout
+            </Button>
+          </Stack>
         </Toolbar>
       </AppBar>
       <Container maxWidth="md" sx={{ mt: 4, mb: 6 }}>
-        <Box hidden={tab !== 0}>
-          <SubmitterView />
-        </Box>
-        <Box hidden={tab !== 1}>
-          <ApproverView />
-        </Box>
+        {/* Only the active tab is mounted, so a role without access to another tab never
+            fires its data-loading effect (e.g. a submitter never calls GET /escalations). */}
+        {tab === 0 && canSubmit && <SubmitterView />}
+        {tab === 1 && canApprove && <ApproverView />}
+        {tab === 2 && canAdmin && <AdminView />}
       </Container>
     </>
   )

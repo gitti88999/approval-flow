@@ -50,12 +50,53 @@ saga/compensation flow, are in [ARCHITECTURE.md](ARCHITECTURE.md).)
    docker compose up -d --build
    ```
 
-3. Open the UI at http://localhost:3000, or call the API directly at http://localhost:8000
-   (e.g. `POST /submit`, `GET /status/{tracking_id}`, `GET /escalations`).
+3. Open the UI at http://localhost:3000 and sign in (see "Authentication" below), or call the
+   API directly at http://localhost:8000 (e.g. `POST /submit`, `GET /status/{tracking_id}`,
+   `GET /escalations`) — every route except `/health` and `/auth/token` requires a bearer token.
 4. Tear down with `docker compose down`.
 
 Only the gateway (`:8000`) and the UI (`:3000`) are exposed to the host — every other service is
 reachable only through Dapr, inside the compose network.
+
+## Authentication
+
+The gateway issues self-signed JWTs (N1) via `POST /auth/token` and enforces role-based access on
+every route it forwards (`submitter`/`approver`/`admin`). Users are real — persisted in Dapr's
+state store with bcrypt-hashed passwords, not a fixed in-memory roster.
+
+**Getting in:**
+
+- **Admin**: the gateway bootstraps one admin account on first startup, from
+  `DEFAULT_ADMIN_USERNAME`/`DEFAULT_ADMIN_PASSWORD` in `.env` (defaults: `admin` / `admin123`).
+  This is the only way an admin account is ever created — `admin` cannot be self-registered
+  (`POST /auth/register` with `role: admin` is rejected with 409).
+- **Submitter / approver**: anyone can self-register via `POST /auth/register` (or the UI's
+  "Register" link), choosing either role. The account is created **pending** and can't log in
+  yet — an existing admin must approve it first, via `GET /auth/pending-users` and
+  `POST /auth/users/{username}/decide` (or the UI's Admin tab).
+
+```bash
+# 1. Register (starts pending)
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"submitter123","role":"submitter"}'
+
+# 2. An admin approves it
+curl -X POST http://localhost:8000/auth/token \
+  -H "Content-Type: application/json" -d '{"username":"admin","password":"admin123"}'
+# -> use the returned access_token as a Bearer token below
+curl -X POST http://localhost:8000/auth/users/alice/decide \
+  -H "Authorization: Bearer <admin_access_token>" \
+  -H "Content-Type: application/json" -d '{"approve": true}'
+
+# 3. Now alice can log in
+curl -X POST http://localhost:8000/auth/token \
+  -H "Content-Type: application/json" -d '{"username":"alice","password":"submitter123"}'
+# -> {"access_token": "...", "token_type": "bearer", "role": "submitter"}
+```
+
+Pass the token as `Authorization: Bearer <access_token>` on subsequent requests. The UI's login
+screen does this automatically and stores the session in the browser.
 
 ## Testing
 
