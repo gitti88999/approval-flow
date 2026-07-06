@@ -50,9 +50,11 @@ saga/compensation flow, are in [ARCHITECTURE.md](ARCHITECTURE.md).)
    docker compose up -d --build
    ```
 
-3. Open the UI at http://localhost:3000 and sign in (see "Authentication" below), or call the
-   API directly at http://localhost:8000 (e.g. `POST /submit`, `GET /status/{tracking_id}`,
-   `GET /escalations`) — every route except `/health` and `/auth/token` requires a bearer token.
+3. Open the UI at http://localhost:3000 and sign in (see "Authentication" below), or explore/call
+   the API directly — **http://localhost:8000/docs** is an interactive Swagger UI (D4) grouped
+   into Auth/Submissions/Escalations/Status, with example request bodies for every route. Get a
+   token from `POST /auth/token`, click **Authorize**, paste it in, and "Try it out" works
+   end-to-end. Every route except `/health` and `/auth/*` requires that bearer token.
 4. Tear down with `docker compose down`.
 
 Only the gateway (`:8000`) and the UI (`:3000`) are exposed to the host — every other service is

@@ -28,7 +28,21 @@ logger = logging.getLogger(__name__)
 # (e.g. /escalations/{tracking_id}/decide) simply by varying the path parameter each request.
 limiter = Limiter(key_func=get_remote_address, key_style="endpoint")
 
-app = FastAPI(title="API Gateway", version="1.0")
+app = FastAPI(
+    title="ApprovalFlow API Gateway",
+    version="1.0",
+    description=(
+        "Single external entry point for ApprovalFlow (M6). Every route below except `/health` "
+        "and `/auth/*` requires a Bearer token — call `POST /auth/token` first, then click "
+        "**Authorize** above and paste the `access_token` to try the other routes here."
+    ),
+    openapi_tags=[
+        {"name": "Auth", "description": "Registration, login, and admin approval of new accounts (N1)."},
+        {"name": "Submissions", "description": "Submit an expense/invoice (F1)."},
+        {"name": "Escalations", "description": "The human-in-the-loop approver queue (F4/F5)."},
+        {"name": "Status", "description": "Check a submission's outcome (F2)."},
+    ],
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -101,11 +115,12 @@ class RegisterRequest(BaseModel):
     role: str
 
 
-@app.post("/auth/register", status_code=201)
+@app.post("/auth/register", status_code=201, tags=["Auth"], summary="Register a new account")
 @limiter.limit("10/minute")
 async def register_user(request: Request, payload: RegisterRequest):
     """N1 — self-service signup, backed by real user storage (Dapr state), not a fixed roster.
-    New submitter/approver accounts start pending until an admin approves them."""
+    New submitter/approver accounts start pending until an admin approves them. `role: admin`
+    is always rejected here — the only admin account is bootstrapped on gateway startup."""
     try:
         account_status = auth.register(payload.username, payload.password, payload.role)
     except ValueError as e:
@@ -113,7 +128,7 @@ async def register_user(request: Request, payload: RegisterRequest):
     return {"status": account_status, "username": payload.username, "role": payload.role}
 
 
-@app.get("/auth/pending-users")
+@app.get("/auth/pending-users", tags=["Auth"], summary="List pending signups (admin only)")
 @limiter.limit("60/minute")
 async def get_pending_users(request: Request, user: dict = Depends(auth.require_role("admin"))):
     """Admin-only: accounts awaiting approval before they can log in."""
@@ -124,7 +139,7 @@ class PendingUserDecision(BaseModel):
     approve: bool
 
 
-@app.post("/auth/users/{username}/decide")
+@app.post("/auth/users/{username}/decide", tags=["Auth"], summary="Approve or reject a pending signup (admin only)")
 @limiter.limit("30/minute")
 async def decide_pending_user(
     username: str, request: Request, decision: PendingUserDecision, user: dict = Depends(auth.require_role("admin"))
@@ -138,10 +153,10 @@ async def decide_pending_user(
         raise HTTPException(status_code=409, detail=str(e))
 
 
-@app.post("/auth/token")
+@app.post("/auth/token", tags=["Auth"], summary="Log in and get a Bearer token")
 @limiter.limit("20/minute")
 async def issue_token(request: Request, credentials: TokenRequest):
-    """N1 — self-signed JWT, issued for any registered user."""
+    """N1 — self-signed JWT, issued for any registered, approved user."""
     try:
         role = auth.authenticate(credentials.username, credentials.password)
     except ValueError as e:
@@ -150,19 +165,70 @@ async def issue_token(request: Request, credentials: TokenRequest):
     return {"access_token": token, "token_type": "bearer", "role": role}
 
 
-@app.post("/submit")
+_SUBMIT_EXAMPLE = {
+    "id": "INV-1001",
+    "submitter": "alice@example.com",
+    "department": "engineering",
+    "vendor": "Corner Bistro",
+    "vendorKnown": True,
+    "invoiceNumber": "CB-4471",
+    "currency": "USD",
+    "category": "meals",
+    "attendees": 1,
+    "lineItems": [{"description": "Team lunch", "quantity": 1, "unitPrice": 42.0}],
+    "taxAmount": 0,
+    "total": 42.0,
+    "receiptPresent": True,
+    "date": "2026-07-05",
+    "notes": "",
+}
+
+
+@app.post(
+    "/submit",
+    tags=["Submissions"],
+    summary="Submit an expense/invoice",
+    description="Requires role submitter or admin. Forwarded to ingestion-service, which "
+    "validates the payload and returns 202 immediately with a tracking id (F1).",
+    openapi_extra={
+        "requestBody": {
+            "content": {"application/json": {"example": _SUBMIT_EXAMPLE}},
+            "required": True,
+        }
+    },
+)
 @limiter.limit("60/minute")
 async def submit(request: Request, user: dict = Depends(auth.require_role("submitter", "admin"))):
     return await invoke(INGESTION_APP_ID, "submit", request)
 
 
-@app.get("/escalations")
+@app.get(
+    "/escalations",
+    tags=["Escalations"],
+    summary="List the approver queue",
+    description="Requires role approver or admin. Only items the system escalated (F4).",
+)
 @limiter.limit("120/minute")
 async def list_escalations(request: Request, user: dict = Depends(auth.require_role("approver", "admin"))):
     return await invoke(APPROVAL_AGENT_APP_ID, "escalations", request)
 
 
-@app.post("/escalations/{tracking_id}/decide")
+@app.post(
+    "/escalations/{tracking_id}/decide",
+    tags=["Escalations"],
+    summary="Approve, reject, or request info",
+    description="Requires role approver or admin (F5).",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "example": {"action": "approve", "approver": "bob", "notes": "Looks fine"}
+                }
+            },
+            "required": True,
+        }
+    },
+)
 @limiter.limit("30/minute")
 async def decide_escalation(
     tracking_id: str, request: Request, user: dict = Depends(auth.require_role("approver", "admin"))
@@ -171,7 +237,21 @@ async def decide_escalation(
     return await invoke(APPROVAL_AGENT_APP_ID, f"escalations/{tracking_id}/decide", request)
 
 
-@app.post("/escalations/{tracking_id}/info")
+@app.post(
+    "/escalations/{tracking_id}/info",
+    tags=["Escalations"],
+    summary="Submitter answers a request_info",
+    description="Requires role submitter or admin — resumes the item back into the approver "
+    "queue (F5).",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "application/json": {"example": {"info": {"business_justification": "Client dinner"}}}
+            },
+            "required": True,
+        }
+    },
+)
 @limiter.limit("30/minute")
 async def provide_escalation_info(
     tracking_id: str, request: Request, user: dict = Depends(auth.require_role("submitter", "admin"))
@@ -180,7 +260,12 @@ async def provide_escalation_info(
     return await invoke(APPROVAL_AGENT_APP_ID, f"escalations/{tracking_id}/info", request)
 
 
-@app.get("/status/{tracking_id}")
+@app.get(
+    "/status/{tracking_id}",
+    tags=["Status"],
+    summary="Check a submission's status",
+    description="Any authenticated role. A plain-language stage + reason (F2).",
+)
 @limiter.limit("120/minute")
 async def get_status(tracking_id: str, request: Request, user: dict = Depends(auth.get_current_user)):
     set_correlation_id(tracking_id)
