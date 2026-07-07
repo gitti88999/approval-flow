@@ -271,6 +271,36 @@ for the published `image:`) and brings the stack up from them with `--no-build`,
 gateway's `/health` before tearing down — proving the published artifact is actually deployable,
 not just that it compiled.
 
+## Eval harness (B1)
+
+`scripts/eval_harness.py` measures the one thing unit tests can't: whether the LLM's actual
+judgment on borderline, policy-nuanced cases matches what a human reviewer would decide. It runs
+`agent.process_invoice_evaluation` in-process (no live stack) against 12 labeled invoices, split
+into two groups:
+
+- **Deterministic** — hard stops and the autonomy ceiling, which are enforced in code before the
+  LLM is ever invoked (see ["The autonomy ceiling"](#the-autonomy-ceiling--where-its-enforced)).
+  Any provider gets these right by construction; they exist to make the harness's own scoring
+  verifiable, not to test the model.
+- **Judgment** — within the ceiling, no hard stop, decided by the LLM against whatever
+  `policy_rag.py` (N5) retrieves for that invoice. This is the group that actually measures
+  something: an alcohol-only receipt that's well under the ceiling but categorically not
+  reimbursable (MEAL-03), the exact `$75`/attendee and `$200`/month boundaries, and first-class
+  travel that always needs a human regardless of amount (TRAVEL-03).
+
+Because only `recommendation == "approve"` triggers payment downstream (`main.py`) — an LLM's
+`"reject"` routes to the same human escalation queue as `"human_review"` — the harness normalizes
+both non-approve outputs to one bucket before scoring, matching what the system actually does
+with the answer.
+
+`GroqProvider` fetches its API key through the Dapr sidecar (M5), which isn't reachable when this
+script runs standalone outside the compose network; the harness patches that one boundary
+(`secrets_client.fetch_secret`) to read the key from the environment instead, the same bypass the
+unit tests already use — no application code changes. Verified live (real Groq calls, not
+mocked): **12/12**, including every judgment case; the same run with `LLM_PROVIDER=stub` scores
+8/12, correctly missing every case that needs real judgment while still acing the 4 deterministic
+ones — proof the harness distinguishes a capable provider from an incapable one, not noise.
+
 ## Configuration & secrets
 
 - `config/policy.json` is the canonical policy document; its values are seeded into the Dapr

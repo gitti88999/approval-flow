@@ -234,3 +234,24 @@ docker compose -f docker-compose.yml -f docker-compose.images.yml up -d --no-bui
 
 No separate hosting target (VM/K8s cluster) is provisioned for this project — GHCR + the smoke
 test is the deployable, verifiable artifact this capstone's scope calls for.
+
+## Eval harness (B1)
+
+`scripts/eval_harness.py` scores the agent's actual decisions against a labeled set of 12
+invoices — 4 deterministic (hard stops / autonomy ceiling, enforced in code before the LLM is
+ever called) and 8 "judgment" cases decided by the LLM against the retrieved policy text (N5),
+covering the nuances a simple limit-check can't: an alcohol-only receipt that's under the ceiling
+but never reimbursable, the exact $75/attendee meal boundary, the $200 SaaS boundary, and
+first-class travel that always needs a human regardless of amount. It runs in-process against the
+real `config/policy.json` — no live stack needed:
+
+```bash
+LLM_PROVIDER=groq python scripts/eval_harness.py   # meaningful score, needs a Groq key
+LLM_PROVIDER=stub python scripts/eval_harness.py   # sanity-checks the harness itself
+```
+
+With the real provider (Llama 3.3 via Groq), the agent currently scores **12/12 (100%)** —
+including every judgment case. Run with `LLM_PROVIDER=stub` instead and it drops to 8/12,
+missing every case that requires actual judgment (the stub always says "approve") while still
+acing all 4 deterministic ones — which is the harness correctly telling a bad provider from a
+good one, not a bug.
