@@ -4,6 +4,8 @@ import pytest
 
 from services.gateway_service import users_store
 
+pytestmark = pytest.mark.unit
+
 
 def _resp(status_code=204, body=None, etag=None):
     m = MagicMock()

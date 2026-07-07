@@ -5,6 +5,8 @@ import pytest
 from services.approval_agent import llm_providers
 from services.approval_agent.llm_providers import GroqProvider, LLMProviderError, StubProvider, get_provider
 
+pytestmark = pytest.mark.unit
+
 
 def test_stub_provider_returns_deterministic_approval():
     result = StubProvider().evaluate("system prompt", {"total": 42})

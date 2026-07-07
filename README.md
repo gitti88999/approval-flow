@@ -108,32 +108,50 @@ curl -X POST http://localhost:8000/auth/token \
 Pass the token as `Authorization: Bearer <access_token>` on subsequent requests. The UI's login
 screen does this automatically and stores the session in the browser.
 
-## Testing
+## Testing (N6 — three independently runnable layers)
 
-**Unit/integration tests** (mocked Dapr calls, no live stack needed) — organized to mirror
-`services/` (`tests/approval_agent/`, `tests/ingestion_service/`, `tests/payment_service/`,
-`tests/gateway_service/`), plus `tests/shared/` for the one cross-cutting test (structured
-logging, which every service implements identically):
+Tests are organized along two axes: **by service** (`tests/approval_agent/`,
+`tests/ingestion_service/`, `tests/payment_service/`, `tests/gateway_service/`, plus
+`tests/shared/` for the one cross-cutting test), and **by layer**, via pytest markers
+(`pytest.ini`) — so `pytest tests/approval_agent/` still finds everything for one service, while
+`pytest -m unit` finds everything at one layer, across services.
+
+**Unit** — isolated, mocked-I/O tests of a single module/function (bcrypt/JWT logic, the outbox's
+transactional writes, the escalation queue's ETag handling, the TF-IDF retriever, the bulkhead's
+concurrency limit, etc.):
 
 ```bash
 pip install -r services/ingestion_service/requirements.txt \
             -r services/approval_agent/requirements.txt \
             -r services/payment_service/requirements.txt \
             -r services/gateway_service/requirements.txt
-PYTHONPATH=. pytest tests/ -v
+PYTHONPATH=. pytest tests/ -m unit -v
 ```
 
-These run automatically in CI on every push (`.github/workflows/ci.yml`), using
-`LLM_PROVIDER=stub` so no API key or network access is required.
+**Integration** — tests of a service's central orchestrating handler composing several of its own
+internal collaborators (the full policy-evaluation pipeline, the payment saga's
+reserve→charge→commit/compensate flow, the gateway's `invoke()` + bulkhead) — still with the
+Dapr/HTTP boundary mocked, no live stack needed:
 
-**End-to-end verification** — brings the stack up, runs the four worked journeys
-(auto-approve, escalate-and-resume, duplicate, payment failure + compensation) plus the
-anti-cheese guards (at least 2 auto-approvals with no human; a prompt-injection-style note does
-not flip an over-ceiling decision) against the live stack, and tears it back down:
+```bash
+PYTHONPATH=. pytest tests/ -m integration -v
+```
+
+Both layers run automatically in CI on every push (`.github/workflows/ci.yml`'s `test` job), using
+`LLM_PROVIDER=stub` so no API key or network access is required. `pytest tests/` (no `-m` filter)
+runs both together, as before.
+
+**End-to-end** — brings the real stack up with Docker and drives it over HTTP through the
+gateway, exactly like a client would: the four worked journeys (auto-approve, escalate-and-resume,
+duplicate, payment failure + compensation) plus the anti-cheese guards (at least 2 auto-approvals
+with no human; a prompt-injection-style note does not flip an over-ceiling decision):
 
 ```bash
 ./verify.sh
 ```
+
+This is also its own CI job (`e2e`, separate from `test` since it's slower and needs Docker) —
+see `.github/workflows/ci.yml`.
 
 ## Autonomy posture (the dilemma)
 

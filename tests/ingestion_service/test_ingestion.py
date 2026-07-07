@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
+pytestmark = pytest.mark.unit
+
 def test_payload_validation():
     raw_payload = {
         "id": "INV-123",

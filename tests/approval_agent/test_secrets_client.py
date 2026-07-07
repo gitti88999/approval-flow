@@ -4,6 +4,8 @@ import pytest
 
 from services.approval_agent import secrets_client
 
+pytestmark = pytest.mark.unit
+
 
 def test_fetch_secret_returns_value_on_success():
     response = MagicMock(status_code=200)

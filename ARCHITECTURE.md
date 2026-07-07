@@ -240,6 +240,27 @@ returning every rule rather than an empty prompt, since an LLM shown nothing has
 reason from. A `policy.retrieve` span (tagged with the retrieved rule ids) nests under the same
 per-evaluation trace as `llm.evaluate` (N4).
 
+## Multi-layer tests (N6)
+
+`tests/` is organized by service (mirroring `services/`) and, orthogonally, by layer via pytest
+markers registered in `pytest.ini`:
+
+- **`unit`** — a single module/function in isolation, all I/O mocked (auth, the outbox's
+  transactional writes, the escalation queue's ETag handling, `policy_rag`'s TF-IDF retriever,
+  the bulkhead's concurrency limit, users_store CRUD, tracing/logging setup).
+- **`integration`** — a service's central orchestrating handler exercised end-to-end *within the
+  process*, composing several of its own collaborators together, still with the Dapr/HTTP
+  boundary mocked: `agent.process_invoice_evaluation` (hard stops → retrieval → LLM → guardrails),
+  `payment.handle_payment` (the full saga), `gateway.invoke` (routing + bulkhead).
+- **`e2e`** — `scripts/verify.py`, which never imports application code directly; it drives the
+  real `docker compose` stack over HTTP through the gateway, the same way a client would.
+
+The two in-process layers run in CI on every push (`pytest -m unit`, `pytest -m integration`);
+`e2e` is a separate, slower CI job that brings the stack up first. Keeping service-based
+directories as the primary layout (rather than top-level `unit/`/`integration/` folders) means a
+change to one service's code and its tests stay next to each other; the marker is what lets either
+layer be selected independently when that's what's needed instead.
+
 ## Continuous deployment (N2)
 
 `.github/workflows/cd.yml` triggers on `workflow_run` after CI, only when CI's conclusion was

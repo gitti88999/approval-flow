@@ -4,6 +4,8 @@ from unittest.mock import patch
 from services.payment_service import main as payment_main
 from services.payment_service import dapr_client
 
+pytestmark = pytest.mark.integration
+
 
 class DummyRequest:
     def __init__(self, payload):

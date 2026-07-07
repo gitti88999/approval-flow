@@ -5,6 +5,8 @@ from fastapi import HTTPException
 
 from services.gateway_service import auth
 
+pytestmark = pytest.mark.unit
+
 FAKE_SECRET = "test-secret"
 
 
