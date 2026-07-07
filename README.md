@@ -23,6 +23,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component/sequence/payment-f
   evaluate -> pay journey across all 4 services, including the LLM call, tagged with the
   correlation id. Metrics: every Dapr sidecar already exposes a Prometheus-format `/metrics`
   endpoint on `:9090` inside the network.
+- **Policy retrieval (N5)** — a pure-Python TF-IDF retriever (`policy_rag.py`) selects only the
+  policy rules relevant to each invoice for the LLM prompt, instead of embedding the entire
+  rulebook on every call.
 
 ## System diagram
 
@@ -176,6 +179,18 @@ currently active" when the dispatcher later fires.
 Metrics: every Dapr sidecar already exposes a Prometheus-format `/metrics` endpoint on `:9090`
 inside the compose network (no extra configuration needed) — not scraped/visualized by a
 dedicated service here, to keep the stack's memory footprint down.
+
+## Policy retrieval (N5)
+
+`approval-agent/policy_rag.py` retrieves only the policy rules relevant to an invoice — scored by
+TF-IDF cosine similarity against the invoice's category, notes, and line-item text — instead of
+dumping the entire rulebook into every LLM prompt. This scales with the policy handbook rather
+than the invoice: a 9-rule policy and a 900-rule one cost the LLM prompt the same amount, since
+only the top matches are ever included. The hard-stop and autonomy-ceiling checks are unaffected —
+they still run against the *full* policy in code, both before the LLM is asked anything and again
+as a guardrail on its answer; retrieval only changes what the LLM sees, never what the router
+allows. See ["Policy retrieval (N5)"](ARCHITECTURE.md#policy-retrieval-n5) in ARCHITECTURE.md for
+the fallback behavior and how it fits into the same trace as N4.
 
 ## Continuous Deployment (N2)
 

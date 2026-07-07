@@ -4,11 +4,12 @@ import requests
 
 try:
     from .config import settings
-    from . import llm_providers, tracing_setup
+    from . import llm_providers, tracing_setup, policy_rag
 except ImportError:
     from config import settings
     import llm_providers
     import tracing_setup
+    import policy_rag
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +118,23 @@ def process_invoice_evaluation(invoice: dict, tracking_id: str) -> dict:
             "reason": f"Amount {amount} exceeds autonomy ceiling of {ceiling}.",
             "confidence": 1.0,
         }
-    # 4. LLM Preparation
-    rules_text = json.dumps(policy.get("rules", {}), indent=2)
+    # 4. Policy retrieval (N5) — only the rules relevant to this invoice go into the prompt,
+    # instead of the entire rulebook every time; scales with how specific the invoice is, not
+    # with how large the policy handbook is.
+    tracer = tracing_setup.get_tracer()
+    with tracer.start_as_current_span("policy.retrieve") as retrieve_span:
+        retrieved = policy_rag.retrieve_relevant_rules(invoice, policy)
+        retrieve_span.set_attribute("correlation_id", tracking_id)
+        retrieve_span.set_attribute(
+            "policy.retrieved_rule_ids", ",".join(r["rule_id"] for r in retrieved)
+        )
+    retrieved_rules = {r["rule_id"]: policy.get("rules", {})[r["rule_id"]] for r in retrieved}
+    logger.info(
+        f"[Agent] Retrieved policy rules for TrackingID {tracking_id}: {list(retrieved_rules.keys())}"
+    )
+
+    # 5. LLM Preparation
+    rules_text = json.dumps(retrieved_rules, indent=2)
     system_prompt = f"""
     You are an automated corporate financial compliance officer.
     Evaluate the invoice against the following rules:
@@ -131,10 +147,9 @@ def process_invoice_evaluation(invoice: dict, tracking_id: str) -> dict:
     Return ONLY the raw JSON object.
     """
 
-    # 5. AI Evaluation — provider is swappable via LLM_PROVIDER (groq default, stub for CI/offline)
+    # 6. AI Evaluation — provider is swappable via LLM_PROVIDER (groq default, stub for CI/offline)
     try:
         provider = llm_providers.get_provider()
-        tracer = tracing_setup.get_tracer()
         # N4 — nests under whatever span is currently active (handle_invoice_submission, set up
         # by main.py), so the LLM call shows up as part of the same end-to-end trace.
         with tracer.start_as_current_span("llm.evaluate") as span:
