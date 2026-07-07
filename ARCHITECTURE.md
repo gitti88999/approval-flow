@@ -220,6 +220,26 @@ Result, verified live: submitting one invoice produces a single Jaeger trace wit
 all 4 services — `gateway -> ingestion-service -> approval-agent (-> llm.evaluate) ->
 payment-service -> approval-agent` — viewable at http://localhost:16686.
 
+## Policy retrieval (N5)
+
+`approval-agent`'s prompt used to embed the entire `rules` dict from the policy document on
+every evaluation. `policy_rag.py` replaces that with retrieval: a pure-Python TF-IDF + cosine
+similarity search (no embedding model, no vector DB — the corpus is small enough that a hashed
+term-frequency index is both sufficient and fully deterministic/offline, so it behaves identically
+under the stub LLM provider used in CI) over one passage per rule, built from its id, description,
+and structured fields (limit, required fields, action). The invoice's category, notes, and
+line-item descriptions form the query; the top-`k` (default 4) highest-scoring rules go into the
+LLM prompt instead of the whole rulebook.
+
+This is deliberately scoped to how the prompt is built, not to what's enforced: the hard-stop
+checks and the autonomy ceiling (see ["The autonomy ceiling"](#the-autonomy-ceiling--where-its-enforced))
+still run against the full policy in code before retrieval even happens, and still gate the
+recommendation afterward — retrieval only changes what the LLM *sees*, never what the router
+*allows*. If an invoice's vocabulary doesn't overlap any rule at all, retrieval falls back to
+returning every rule rather than an empty prompt, since an LLM shown nothing has no basis to
+reason from. A `policy.retrieve` span (tagged with the retrieved rule ids) nests under the same
+per-evaluation trace as `llm.evaluate` (N4).
+
 ## Continuous deployment (N2)
 
 `.github/workflows/cd.yml` triggers on `workflow_run` after CI, only when CI's conclusion was
