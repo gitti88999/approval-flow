@@ -2,6 +2,8 @@ import pytest
 from unittest.mock import patch
 from services.approval_agent.agent import process_invoice_evaluation
 
+pytestmark = pytest.mark.integration
+
 MOCK_POLICY = {
     "autonomy_settings": {
         "ceiling_usd": 250,

@@ -1,7 +1,11 @@
 from unittest.mock import patch
 
+import pytest
+
 from services.approval_agent.agent import process_invoice_evaluation
 from services.approval_agent.llm_providers import LLMProvider
+
+pytestmark = pytest.mark.integration
 
 POLICY = {
     "autonomy_settings": {"ceiling_usd": 250, "confidence_threshold": 0.80, "hard_stops": []},

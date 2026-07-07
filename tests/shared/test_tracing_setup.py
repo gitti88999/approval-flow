@@ -2,6 +2,8 @@ import importlib
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 MODULES = [
     "services.approval_agent.tracing_setup",
     "services.payment_service.tracing_setup",

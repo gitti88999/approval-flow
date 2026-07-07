@@ -1,4 +1,8 @@
+import pytest
+
 from services.approval_agent import policy_rag
+
+pytestmark = pytest.mark.unit
 
 POLICY = {
     "autonomy_settings": {"ceiling_usd": 250, "confidence_threshold": 0.80, "hard_stops": []},

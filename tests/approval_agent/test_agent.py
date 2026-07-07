@@ -2,6 +2,8 @@ import pytest
 import httpx
 from unittest.mock import AsyncMock, patch
 
+pytestmark = pytest.mark.unit
+
 def test_dapr_payload_structure():
     tracking_id = "TEST-123"
     result = {"recommendation": "approve", "reason": "Policy met"}

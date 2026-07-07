@@ -4,6 +4,8 @@ import pytest
 
 from services.gateway_service.bulkhead import Bulkhead
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.asyncio
 async def test_try_enter_succeeds_under_limit():

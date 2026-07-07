@@ -5,6 +5,8 @@ from fastapi import Request
 
 from services.gateway_service import main as gateway_main
 
+pytestmark = pytest.mark.integration
+
 
 def _request(method="POST", body=b'{"id":"INV-1"}', content_type="application/json"):
     req = MagicMock(spec=Request)

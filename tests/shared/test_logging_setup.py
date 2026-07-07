@@ -4,6 +4,8 @@ import logging
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 MODULES = [
     "services.ingestion_service.logging_setup",
     "services.approval_agent.logging_setup",

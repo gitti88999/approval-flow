@@ -4,6 +4,8 @@ import pytest
 
 from services.approval_agent import outbox
 
+pytestmark = pytest.mark.unit
+
 
 def _resp(status_code=204, body=None, etag=None):
     m = MagicMock()

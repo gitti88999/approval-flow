@@ -1,6 +1,10 @@
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 from services.approval_agent import escalation
+
+pytestmark = pytest.mark.unit
 
 
 def _resp(status_code=204, body=None, etag=None):

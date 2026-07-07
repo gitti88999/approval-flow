@@ -4,6 +4,8 @@ import pytest
 
 from services.approval_agent import main as agent_main
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.mark.asyncio
 async def test_status_processing_when_nothing_recorded_yet():
