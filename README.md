@@ -16,7 +16,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component/sequence/payment-f
 - **Groq** (Llama 3.3) as the default LLM provider, swappable via `LLM_PROVIDER` (a deterministic
   stub provider is used in CI and available for offline development)
 - **Docker Compose** to run the whole system with one command
-- **GitHub Actions** for CI (lint + tests + a docker-compose build check)
+- **GitHub Actions** for CI (lint + tests + a docker-compose build check) and CD (image
+  publish + smoke test)
 - **pytest** / **pytest-asyncio** for automated tests
 - **OpenTelemetry + Jaeger** for distributed tracing (N4) — one trace spans the whole submit ->
   evaluate -> pay journey across all 4 services, including the LLM call, tagged with the
@@ -175,3 +176,28 @@ currently active" when the dispatcher later fires.
 Metrics: every Dapr sidecar already exposes a Prometheus-format `/metrics` endpoint on `:9090`
 inside the compose network (no extra configuration needed) — not scraped/visualized by a
 dedicated service here, to keep the stack's memory footprint down.
+
+## Continuous Deployment (N2)
+
+`.github/workflows/cd.yml` runs after CI finishes successfully on `main` or `dev`
+(`workflow_run`, gated on `conclusion == success` — a red CI run is never published):
+
+1. **Build & push** — all 5 service images (`ingestion-service`, `approval-agent`,
+   `payment-service`, `gateway-service`, `ui`) are built and pushed to GHCR, tagged with both the
+   branch name and `sha-<commit>` for a precise rollback target.
+2. **Smoke test** — a separate job then *pulls those exact just-published images* (never rebuilds
+   locally) via the `docker-compose.images.yml` overlay, brings the whole stack up from them, and
+   polls `/health` on the gateway before tearing down. This is the same "prove it actually runs,
+   not just that it compiles" bar used throughout this project — a CD pipeline that only proves an
+   image *builds* isn't proof it *deploys*.
+
+To run the published images yourself instead of building locally:
+
+```bash
+IMAGE_OWNER=<github-owner-lowercase> IMAGE_TAG=main \
+  docker compose -f docker-compose.yml -f docker-compose.images.yml pull
+docker compose -f docker-compose.yml -f docker-compose.images.yml up -d --no-build
+```
+
+No separate hosting target (VM/K8s cluster) is provisioned for this project — GHCR + the smoke
+test is the deployable, verifiable artifact this capstone's scope calls for.

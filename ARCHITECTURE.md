@@ -220,6 +220,16 @@ Result, verified live: submitting one invoice produces a single Jaeger trace wit
 all 4 services — `gateway -> ingestion-service -> approval-agent (-> llm.evaluate) ->
 payment-service -> approval-agent` — viewable at http://localhost:16686.
 
+## Continuous deployment (N2)
+
+`.github/workflows/cd.yml` triggers on `workflow_run` after CI, only when CI's conclusion was
+`success`, on `main`/`dev` — so nothing gets published from a failing build. It builds and pushes
+all 5 service images to GHCR (tagged by branch and by `sha-<commit>`), then a second job pulls
+those exact images (via `docker-compose.images.yml`, an overlay that swaps each service's `build:`
+for the published `image:`) and brings the stack up from them with `--no-build`, polling the
+gateway's `/health` before tearing down — proving the published artifact is actually deployable,
+not just that it compiled.
+
 ## Configuration & secrets
 
 - `config/policy.json` is the canonical policy document; its values are seeded into the Dapr
