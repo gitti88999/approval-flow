@@ -147,9 +147,12 @@ flowchart TD
 ```
 
 No reservation is ever left in the `reserved` state: every path from `Reserve` ends at either
-`Commit` (paid) or `Compensate` (released). A redelivered event for a tracking id already in a
-terminal state (`paid`/`compensated`) is a no-op, verified by `tests/test_payment.py` and by
-`scripts/verify.py`'s payment-failure journey.
+`Commit` (paid) or `Compensate` (released). A redelivered event for a tracking id that already
+has *any* payment record — reserved, paid, or compensated — is a no-op, verified by
+`tests/payment_service/test_payment.py` and by `scripts/verify.py`'s payment-failure journey. The
+check is deliberately not narrowed to terminal states only: Dapr pub/sub is at-least-once, and a
+redelivery can arrive while an earlier delivery is still between `reserved` and a terminal state —
+a terminal-states-only check would let that redelivery re-run the charge.
 
 ## The autonomy ceiling — where it's enforced
 
@@ -168,9 +171,10 @@ for an over-ceiling amount — and that the provider was never even called.
 - **Duplicate submissions** (F3): `ingestion-service` computes a fingerprint from
   `vendor + invoiceNumber + total` and rejects a repeat with `409 Conflict` before it ever reaches
   the rest of the pipeline.
-- **Redelivered events**: `payment-service` checks its own state for a terminal status
-  (`paid`/`compensated`) before doing anything, so a redelivered `payment-required` event is a
-  no-op.
+- **Redelivered events**: `payment-service` checks whether it already has *any* saga state for
+  the tracking id before doing anything, so a redelivered `payment-required` event is a no-op —
+  including one arriving while an earlier delivery is still in flight (`reserved`, not yet
+  terminal), not just after it reaches `paid`/`compensated`.
 - **Retried decisions**: `approval-agent`'s `resolve_decision` only flips an escalation's status
   to a terminal value as its last step, after the idempotent side effects (publish, queue
   removal) — so retrying a failed decision call is safe.

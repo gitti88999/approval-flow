@@ -58,3 +58,18 @@ async def test_duplicate_event_is_a_noop():
     assert "already processed" in result.get("note", "")
     mock_save.assert_not_called()
     mock_publish.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_redelivery_while_reserved_is_a_noop():
+    """A redelivered payment-required event arriving after the first delivery reached
+    'reserved' but before it reached a terminal state must not trigger a second charge —
+    the gap this closes: checking only for terminal states would have let this through."""
+    with patch.object(dapr_client, "get_payment_state", return_value={"status": "reserved"}), \
+         patch.object(dapr_client, "save_payment_state") as mock_save, \
+         patch.object(dapr_client, "publish_outcome") as mock_publish:
+        result = await payment_main.handle_payment(DummyRequest(_event()))
+
+    assert "already processed" in result.get("note", "")
+    mock_save.assert_not_called()
+    mock_publish.assert_not_called()

@@ -18,8 +18,6 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Payment Service", version="1.0")
 
-TERMINAL_STATES = {"paid", "compensated"}
-
 # Lets fixtures/tests force a gateway decline deterministically, since there's no real
 # payment gateway to fail against — put this marker in the invoice notes.
 FAILURE_MARKER = "SIMULATE_PAYMENT_FAILURE"
@@ -64,8 +62,14 @@ async def handle_payment(request: Request):
             logger.error(f"{tracking_id} - {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
-        if existing and existing.get("status") in TERMINAL_STATES:
-            logger.info(f"{tracking_id} - Duplicate payment-required event ignored, already {existing['status']}")
+        # A redelivered payment-required event (Dapr pub/sub is at-least-once) must never
+        # re-run the charge — including while an earlier delivery is still in flight. Checking
+        # only for TERMINAL_STATES here left a window: a redelivery arriving after the first
+        # delivery reached "reserved" but before it reached "paid"/"compensated" would not have
+        # been recognized as a duplicate and would call charge_payment() a second time. Treating
+        # any existing record as "already being handled" closes that window.
+        if existing is not None:
+            logger.info(f"{tracking_id} - Duplicate payment-required event ignored (existing status={existing.get('status')})")
             return {"status": "SUCCESS", "note": "already processed"}
 
         # Step 1: reserve. This must be persisted before we attempt the charge, and it must
