@@ -14,16 +14,22 @@ import AdminView from './AdminView.jsx'
 import Login from './Login.jsx'
 import { getSession, clearSession } from './api.js'
 
+function initialTabForRole(role) {
+  if (role === 'admin') return 2
+  if (role === 'approver') return 1
+  return 0
+}
+
 export default function App() {
   const [session, setSession] = useState(getSession())
-  const [tab, setTab] = useState(session?.role === 'approver' ? 1 : 0)
+  const [tab, setTab] = useState(initialTabForRole(session?.role))
 
   if (!session) {
     return (
       <Login
         onLoggedIn={(newSession) => {
           setSession(newSession)
-          setTab(newSession.role === 'approver' ? 1 : 0)
+          setTab(initialTabForRole(newSession.role))
         }}
       />
     )
@@ -34,7 +40,7 @@ export default function App() {
     setSession(null)
   }
 
-  const canSubmit = session.role === 'submitter' || session.role === 'admin'
+  const canSubmit = session.role === 'submitter' || session.role === 'approver' || session.role === 'admin'
   const canApprove = session.role === 'approver' || session.role === 'admin'
   const canAdmin = session.role === 'admin'
 

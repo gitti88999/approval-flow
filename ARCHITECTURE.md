@@ -168,7 +168,7 @@ for an over-ceiling amount — and that the provider was never even called.
 
 ## Idempotency
 
-- **Duplicate submissions** (F3): `ingestion-service` computes a fingerprint from
+- **Duplicate submissions**: `ingestion-service` computes a fingerprint from
   `vendor + invoiceNumber + total` and rejects a repeat with `409 Conflict` before it ever reaches
   the rest of the pipeline.
 - **Redelivered events**: `payment-service` checks whether it already has *any* saga state for
@@ -179,7 +179,7 @@ for an over-ceiling amount — and that the provider was never even called.
   to a terminal value as its last step, after the idempotent side effects (publish, queue
   removal) — so retrying a failed decision call is safe.
 
-## Reliability: outbox and bulkhead (N3)
+## Reliability: outbox and bulkhead
 
 `approval-agent` publishes `payment-required` in two places — the auto-approve path
 (`main.py::handle_invoice_event`) and an approver's "approve" decision
@@ -202,7 +202,7 @@ default 20) — a classic bulkhead: an overloaded `ingestion-service` can't also
 `approval-agent` calls by consuming all of the gateway's outbound capacity, and a full bulkhead
 fails fast with `503` rather than queueing unbounded work.
 
-## Observability (N4)
+## Observability
 
 Dapr auto-instruments its own sidecar-mediated hops (service invocation, pub/sub delivery) once
 tracing is enabled (`dapr/components/tracing-config.yaml`, exporting to Jaeger over OTLP). The
@@ -224,7 +224,7 @@ Result, verified live: submitting one invoice produces a single Jaeger trace wit
 all 4 services — `gateway -> ingestion-service -> approval-agent (-> llm.evaluate) ->
 payment-service -> approval-agent` — viewable at http://localhost:16686.
 
-## Policy retrieval (N5)
+## Policy retrieval
 
 `approval-agent`'s prompt used to embed the entire `rules` dict from the policy document on
 every evaluation. `policy_rag.py` replaces that with retrieval: a pure-Python TF-IDF + cosine
@@ -242,9 +242,9 @@ recommendation afterward — retrieval only changes what the LLM *sees*, never w
 *allows*. If an invoice's vocabulary doesn't overlap any rule at all, retrieval falls back to
 returning every rule rather than an empty prompt, since an LLM shown nothing has no basis to
 reason from. A `policy.retrieve` span (tagged with the retrieved rule ids) nests under the same
-per-evaluation trace as `llm.evaluate` (N4).
+per-evaluation trace as `llm.evaluate`.
 
-## Multi-layer tests (N6)
+## Multi-layer tests
 
 `tests/` is organized by service (mirroring `services/`) and, orthogonally, by layer via pytest
 markers registered in `pytest.ini`:
@@ -265,7 +265,7 @@ directories as the primary layout (rather than top-level `unit/`/`integration/` 
 change to one service's code and its tests stay next to each other; the marker is what lets either
 layer be selected independently when that's what's needed instead.
 
-## Continuous deployment (N2)
+## Continuous deployment
 
 `.github/workflows/cd.yml` triggers on `workflow_run` after CI, only when CI's conclusion was
 `success`, on `main`/`dev` — so nothing gets published from a failing build. It builds and pushes
@@ -275,7 +275,7 @@ for the published `image:`) and brings the stack up from them with `--no-build`,
 gateway's `/health` before tearing down — proving the published artifact is actually deployable,
 not just that it compiled.
 
-## Eval harness (B1)
+## Eval harness
 
 `scripts/eval_harness.py` measures the one thing unit tests can't: whether the LLM's actual
 judgment on borderline, policy-nuanced cases matches what a human reviewer would decide. It runs
@@ -287,7 +287,7 @@ into two groups:
   Any provider gets these right by construction; they exist to make the harness's own scoring
   verifiable, not to test the model.
 - **Judgment** — within the ceiling, no hard stop, decided by the LLM against whatever
-  `policy_rag.py` (N5) retrieves for that invoice. This is the group that actually measures
+  `policy_rag.py` retrieves for that invoice. This is the group that actually measures
   something: an alcohol-only receipt that's well under the ceiling but categorically not
   reimbursable (MEAL-03), the exact `$75`/attendee and `$200`/month boundaries, and first-class
   travel that always needs a human regardless of amount (TRAVEL-03).
@@ -297,7 +297,7 @@ Because only `recommendation == "approve"` triggers payment downstream (`main.py
 both non-approve outputs to one bucket before scoring, matching what the system actually does
 with the answer.
 
-`GroqProvider` fetches its API key through the Dapr sidecar (M5), which isn't reachable when this
+`GroqProvider` fetches its API key through the Dapr sidecar, which isn't reachable when this
 script runs standalone outside the compose network; the harness patches that one boundary
 (`secrets_client.fetch_secret`) to read the key from the environment instead, the same bypass the
 unit tests already use — no application code changes. Verified live (real Groq calls, not
@@ -309,6 +309,6 @@ ones — proof the harness distinguishes a capable provider from an incapable on
 
 - `config/policy.json` is the canonical policy document; its values are seeded into the Dapr
   `configstore` component (via `redis-init` in `docker-compose.yml`) so they're changeable at
-  runtime without a redeploy (M13).
+  runtime without a redeploy.
 - `GROQ_API_KEY` is read through the Dapr `local-secret-store` component rather than a plain
-  environment variable in application code (M5).
+  environment variable in application code.

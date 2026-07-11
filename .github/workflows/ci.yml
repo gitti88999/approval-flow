@@ -7,7 +7,7 @@ on:
     branches: ["main", "dev"]
 
 jobs:
-  # Layer 1 & 2 (N6): unit + integration — fast, mocked-Dapr tests, independently selectable via
+  # Layer 1 & 2: unit + integration — fast, mocked-Dapr tests, independently selectable via
   # `pytest -m unit` / `pytest -m integration` (see pytest.ini). Both run together here since
   # neither needs the live stack; split into separate steps so a failure clearly names its layer.
   test:
@@ -61,7 +61,7 @@ jobs:
           GROQ_API_KEY: dummy-key-for-ci
           JWT_SECRET: dummy-secret-for-ci
 
-  # Layer 3 (N6): end-to-end — brings up the real stack and drives it exactly like a client
+  # Layer 3: end-to-end — brings up the real stack and drives it exactly like a client
   # would, over HTTP, through the gateway. Separate from the other two layers on purpose: it's
   # slow and needs Docker, so it shouldn't block a fast unit/integration signal on every push.
   e2e:

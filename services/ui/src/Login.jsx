@@ -11,6 +11,8 @@ import Typography from '@mui/material/Typography'
 import CircularProgress from '@mui/material/CircularProgress'
 import Container from '@mui/material/Container'
 import Link from '@mui/material/Link'
+import IconButton from '@mui/material/IconButton'
+import InputAdornment from '@mui/material/InputAdornment'
 import { login, register } from './api.js'
 
 const ROLES = ['submitter', 'approver', 'admin']
@@ -19,6 +21,7 @@ export default function Login({ onLoggedIn }) {
   const [mode, setMode] = useState('login') // 'login' | 'register'
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [role, setRole] = useState('submitter')
   const [error, setError] = useState(null)
   const [info, setInfo] = useState(null)
@@ -65,11 +68,25 @@ export default function Login({ onLoggedIn }) {
               />
               <TextField
                 label="Password"
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 fullWidth
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                        onClick={() => setShowPassword((v) => !v)}
+                        edge="end"
+                        size="small"
+                      >
+                        {showPassword ? '🙈' : '👁️'}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
               />
               {mode === 'register' && (
                 <TextField select label="Role" fullWidth value={role} onChange={(e) => setRole(e.target.value)}>
@@ -90,7 +107,7 @@ export default function Login({ onLoggedIn }) {
               <>
                 No account?{' '}
                 <Link component="button" type="button" onClick={() => { setMode('register'); setError(null) }}>
-                  Register one
+                  Register
                 </Link>
               </>
             ) : (

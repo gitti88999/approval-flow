@@ -31,7 +31,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def register(username: str, password: str, role: str, *, allow_admin: bool = False) -> str:
-    """Signup (N1). Public callers can only self-assign submitter/approver; admin is reserved
+    """Signup. Public callers can only self-assign submitter/approver; admin is reserved
     for the startup bootstrap (allow_admin=True), which no route exposes.
 
     Self-service submitter/approver accounts start "pending" and cannot log in until an admin

@@ -66,7 +66,7 @@ def _mutate_queue(mutate_fn: Callable[[List[str]], List[str]], attempts: int = 5
 
 
 def enqueue_with_state(state_items: List[dict], pubsub_name: str, topic: str, payload: dict) -> str:
-    """The outbox pattern (N3): atomically persists state_items together with a durable record of
+    """The outbox pattern: atomically persists state_items together with a durable record of
     the event that must eventually be published, in one Dapr state transaction. This closes a real
     gap in the previous code: a direct 'save state, then publish' sequence loses the event forever
     if the publish call fails or the process dies in between, even though the state write already

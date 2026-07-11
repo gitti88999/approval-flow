@@ -40,7 +40,7 @@ def save_idempotency_state(idempotency_key: str, invoice_id: str, tracking_id: s
 
 def publish_to_pubsub(tracking_id: str, invoice: InvoiceSubmission, traceparent: str = None):
     """Publishes the structured event payload (including tracking_id) within the background tasks
-    context. traceparent (N4), if given, is the incoming /submit request's own W3C trace header —
+    context. traceparent, if given, is the incoming /submit request's own W3C trace header —
     forwarding it here means the async submitted-invoices delivery continues the same distributed
     trace Dapr started for the sync gateway -> ingestion-service call, instead of starting a new,
     disconnected one."""

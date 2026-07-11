@@ -81,7 +81,7 @@ async def subscribe():
 
 @app.post("/events/payment-outcome", status_code=status.HTTP_200_OK)
 async def handle_payment_outcome(request: Request):
-    """Records the payment service's final outcome so GET /status can report it (F2)."""
+    """Records the payment service's final outcome so GET /status can report it."""
     event_envelope = await request.json()
     event_data = event_envelope.get("data", event_envelope)
     tracking_id = event_data.get("tracking_id")
@@ -130,7 +130,7 @@ async def handle_invoice_event(request: Request):
         }
 
         if evaluation_result.get("recommendation") == "approve":
-            # Outbox pattern (N3): persist the evaluation and the payment-required event in one
+            # Outbox pattern: persist the evaluation and the payment-required event in one
             # atomic Dapr state transaction, so the intent to publish can never be silently lost
             # even if the direct publish below fails or the process dies — the background
             # dispatcher will still deliver it. Previously this was a plain "save state, then
@@ -159,7 +159,7 @@ async def handle_invoice_event(request: Request):
                 logger.error(f"[Agent DB] Error: {str(e)}")
 
             # Anything the agent doesn't clear for auto-approval pauses here for a human — the
-            # agent never auto-rejects on its own; a human makes the final call (F6).
+            # agent never auto-rejects on its own; a human makes the final call.
             try:
                 escalation.save_escalation(
                     tracking_id,

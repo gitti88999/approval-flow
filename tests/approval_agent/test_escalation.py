@@ -51,7 +51,7 @@ def test_list_open_escalations_filters_by_status():
 
 def test_resolve_decision_approve_enqueues_outbox_event():
     """resolve_decision no longer publishes directly — it hands the escalation-record update and
-    the payment-required event to the outbox (N3) as one atomic unit."""
+    the payment-required event to the outbox as one atomic unit."""
     record_resp = MagicMock(status_code=200, text="x")
     record_resp.json.return_value = {
         "tracking_id": "T1",

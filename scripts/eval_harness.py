@@ -1,4 +1,4 @@
-"""Eval harness (B1): scores the approval-agent's decisions against a labeled set of invoices.
+"""Eval harness: scores the approval-agent's decisions against a labeled set of invoices.
 
 Runs `process_invoice_evaluation` in-process against the real `config/policy.json` — no live
 stack needed — and reports per-class precision/recall plus a confusion matrix over the two
@@ -11,7 +11,7 @@ Cases split into two groups:
     so any provider gets these right by construction. Included to make the harness's own
     scoring machinery verifiable — a broken harness should get 0 %, not a broken agent.
   - Judgment: within the ceiling, no hard stop, decided by the LLM against the retrieved policy
-    text (N5) — this is the part actually worth measuring. StubProvider always says "approve", so
+    text — this is the part actually worth measuring. StubProvider always says "approve", so
     running with LLM_PROVIDER=stub will visibly fail every judgment case labeled human_review —
     that's expected, and is itself the harness proving it can tell a bad provider from a good one.
     Run with LLM_PROVIDER=groq for a meaningful score.

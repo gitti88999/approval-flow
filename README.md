@@ -19,11 +19,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component/sequence/payment-f
 - **GitHub Actions** for CI (lint + tests + a docker-compose build check) and CD (image
   publish + smoke test)
 - **pytest** / **pytest-asyncio** for automated tests
-- **OpenTelemetry + Jaeger** for distributed tracing (N4) — one trace spans the whole submit ->
+- **OpenTelemetry + Jaeger** for distributed tracing — one trace spans the whole submit ->
   evaluate -> pay journey across all 4 services, including the LLM call, tagged with the
   correlation id. Metrics: every Dapr sidecar already exposes a Prometheus-format `/metrics`
   endpoint on `:9090` inside the network.
-- **Policy retrieval (N5)** — a pure-Python TF-IDF retriever (`policy_rag.py`) selects only the
+- **Policy retrieval** — a pure-Python TF-IDF retriever (`policy_rag.py`) selects only the
   policy rules relevant to each invoice for the LLM prompt, instead of embedding the entire
   rulebook on every call.
 
@@ -59,7 +59,7 @@ saga/compensation flow, are in [ARCHITECTURE.md](ARCHITECTURE.md).)
    ```
 
 3. Open the UI at http://localhost:3000 and sign in (see "Authentication" below), or explore/call
-   the API directly — **http://localhost:8000/docs** is an interactive Swagger UI (D4) grouped
+   the API directly — **http://localhost:8000/docs** is an interactive Swagger UI grouped
    into Auth/Submissions/Escalations/Status, with example request bodies for every route. Get a
    token from `POST /auth/token`, click **Authorize**, paste it in, and "Try it out" works
    end-to-end. Every route except `/health` and `/auth/*` requires that bearer token.
@@ -70,7 +70,7 @@ reachable only through Dapr, inside the compose network.
 
 ## Authentication
 
-The gateway issues self-signed JWTs (N1) via `POST /auth/token` and enforces role-based access on
+The gateway issues self-signed JWTs via `POST /auth/token` and enforces role-based access on
 every route it forwards (`submitter`/`approver`/`admin`). Users are real — persisted in Dapr's
 state store with bcrypt-hashed passwords, not a fixed in-memory roster.
 
@@ -163,7 +163,7 @@ by deterministic code in `approval-agent`, not by trusting the model — see
 ARCHITECTURE.md for exactly where and how, and `tests/approval_agent/test_ceiling_proof.py` for
 the test that proves it holds even when the model is forced to recommend approval.
 
-## Reliability extras (N3)
+## Reliability extras
 
 - **Transactional outbox** — `approval-agent` never does a plain "save state, then publish"
   sequence for the `payment-required` event. Both the state write and a durable record of the
@@ -178,7 +178,7 @@ the test that proves it holds even when the model is forced to recommend approva
   capacity. A full bulkhead returns `503` immediately rather than queueing. Verified live by
   firing 60 concurrent submissions: exactly 20 succeeded and 40 got `503`.
 
-## Observability (N4)
+## Observability
 
 Open **http://localhost:16686** (Jaeger) after submitting anything through the UI or API — search
 for the `gateway` service and you'll find one continuous trace for the whole journey:
@@ -198,7 +198,7 @@ Metrics: every Dapr sidecar already exposes a Prometheus-format `/metrics` endpo
 inside the compose network (no extra configuration needed) — not scraped/visualized by a
 dedicated service here, to keep the stack's memory footprint down.
 
-## Policy retrieval (N5)
+## Policy retrieval
 
 `approval-agent/policy_rag.py` retrieves only the policy rules relevant to an invoice — scored by
 TF-IDF cosine similarity against the invoice's category, notes, and line-item text — instead of
@@ -207,10 +207,10 @@ than the invoice: a 9-rule policy and a 900-rule one cost the LLM prompt the sam
 only the top matches are ever included. The hard-stop and autonomy-ceiling checks are unaffected —
 they still run against the *full* policy in code, both before the LLM is asked anything and again
 as a guardrail on its answer; retrieval only changes what the LLM sees, never what the router
-allows. See ["Policy retrieval (N5)"](ARCHITECTURE.md#policy-retrieval-n5) in ARCHITECTURE.md for
-the fallback behavior and how it fits into the same trace as N4.
+allows. See ["Policy retrieval"](ARCHITECTURE.md#policy-retrieval) in ARCHITECTURE.md for
+the fallback behavior and how it fits into the same trace.
 
-## Continuous Deployment (N2)
+## Continuous Deployment
 
 `.github/workflows/cd.yml` runs after CI finishes successfully on `main` or `dev`
 (`workflow_run`, gated on `conclusion == success` — a red CI run is never published):
@@ -235,11 +235,11 @@ docker compose -f docker-compose.yml -f docker-compose.images.yml up -d --no-bui
 No separate hosting target (VM/K8s cluster) is provisioned for this project — GHCR + the smoke
 test is the deployable, verifiable artifact this capstone's scope calls for.
 
-## Eval harness (B1)
+## Eval harness
 
 `scripts/eval_harness.py` scores the agent's actual decisions against a labeled set of 12
 invoices — 4 deterministic (hard stops / autonomy ceiling, enforced in code before the LLM is
-ever called) and 8 "judgment" cases decided by the LLM against the retrieved policy text (N5),
+ever called) and 8 "judgment" cases decided by the LLM against the retrieved policy text,
 covering the nuances a simple limit-check can't: an alcohol-only receipt that's under the ceiling
 but never reimbursable, the exact $75/attendee meal boundary, the $200 SaaS boundary, and
 first-class travel that always needs a human regardless of amount. It runs in-process against the

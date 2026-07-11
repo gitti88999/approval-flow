@@ -87,7 +87,7 @@ def save_escalation(tracking_id: str, invoice: dict, recommendation: str, reason
 
 
 def list_open_escalations() -> List[dict]:
-    """The approver queue (F4): only items still awaiting a human decision."""
+    """The approver queue: only items still awaiting a human decision."""
     queue, _ = _get_queue()
     items = []
     for tracking_id in queue:
@@ -98,7 +98,7 @@ def list_open_escalations() -> List[dict]:
 
 
 def resolve_decision(tracking_id: str, action: str, approver: str, notes: str) -> dict:
-    """Applies an approver's decision (F5). 'approve' resumes the workflow exactly where the agent
+    """Applies an approver's decision. 'approve' resumes the workflow exactly where the agent
     paused it, by publishing the same payment-required event the auto-approve path would have sent.
     'reject' terminates the item. 'request_info' pauses for the submitter without removing the
     durable escalation record, so it survives a restart until the submitter responds."""
@@ -113,7 +113,7 @@ def resolve_decision(tracking_id: str, action: str, approver: str, notes: str) -
     # same call is safe: publishing again is deduped by payment-service, and removing an
     # already-removed id from the queue is a no-op.
     if action == "approve":
-        # Outbox pattern (N3): the escalation record's "approved" status and the
+        # Outbox pattern: the escalation record's "approved" status and the
         # payment-required event are committed in one atomic Dapr state transaction, so a
         # publish failure can never leave the item marked approved with no record that payment
         # was ever supposed to happen — outbox.dispatch_pending() delivers it, retrying until
@@ -143,7 +143,7 @@ def resolve_decision(tracking_id: str, action: str, approver: str, notes: str) -
 
 
 def submit_additional_info(tracking_id: str, info: dict) -> dict:
-    """The submitter answers a request_info (F5): merge the extra fields into the invoice and hand
+    """The submitter answers a request_info: merge the extra fields into the invoice and hand
     the item back to the approver queue, resuming exactly where the pause happened."""
     record = get_escalation(tracking_id)
     if record is None:

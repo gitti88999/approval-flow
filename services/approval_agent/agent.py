@@ -118,7 +118,7 @@ def process_invoice_evaluation(invoice: dict, tracking_id: str) -> dict:
             "reason": f"Amount {amount} exceeds autonomy ceiling of {ceiling}.",
             "confidence": 1.0,
         }
-    # 4. Policy retrieval (N5) — only the rules relevant to this invoice go into the prompt,
+    # 4. Policy retrieval — only the rules relevant to this invoice go into the prompt,
     # instead of the entire rulebook every time; scales with how specific the invoice is, not
     # with how large the policy handbook is.
     tracer = tracing_setup.get_tracer()

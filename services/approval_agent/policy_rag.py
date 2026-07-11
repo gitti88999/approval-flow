@@ -1,5 +1,5 @@
 """Retrieves the policy rules relevant to a given invoice, instead of stuffing the entire
-rulebook into every LLM prompt (N5).
+rulebook into every LLM prompt.
 
 Pure-Python TF-IDF + cosine similarity — no embedding model or vector DB. The policy handbook
 here is 9 rules, but the retrieval scales the same way a real, much larger handbook would: the

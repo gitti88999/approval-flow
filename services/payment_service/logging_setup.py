@@ -36,7 +36,7 @@ class JsonFormatter(logging.Formatter):
 
 def configure_logging(service_name: str, level: int = logging.INFO) -> None:
     """Every log line is a JSON object carrying the current correlation id, so a single
-    request/event can be grepped end-to-end across services (M14)."""
+    request/event can be grepped end-to-end across services."""
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter(service_name))
     handler.addFilter(CorrelationIdFilter())

@@ -34,15 +34,15 @@ app = FastAPI(
     title="ApprovalFlow API Gateway",
     version="1.0",
     description=(
-        "Single external entry point for ApprovalFlow (M6). Every route below except `/health` "
+        "Single external entry point for ApprovalFlow. Every route below except `/health` "
         "and `/auth/*` requires a Bearer token — call `POST /auth/token` first, then click "
         "**Authorize** above and paste the `access_token` to try the other routes here."
     ),
     openapi_tags=[
-        {"name": "Auth", "description": "Registration, login, and admin approval of new accounts (N1)."},
-        {"name": "Submissions", "description": "Submit an expense/invoice (F1)."},
-        {"name": "Escalations", "description": "The human-in-the-loop approver queue (F4/F5)."},
-        {"name": "Status", "description": "Check a submission's outcome (F2)."},
+        {"name": "Auth", "description": "Registration, login, and admin approval of new accounts."},
+        {"name": "Submissions", "description": "Submit an expense/invoice."},
+        {"name": "Escalations", "description": "The human-in-the-loop approver queue."},
+        {"name": "Status", "description": "Check a submission's outcome."},
     ],
 )
 app.state.limiter = limiter
@@ -55,7 +55,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Bulkhead (N3): one bucket of concurrency per downstream app, so a slow/overloaded
+# Bulkhead: one bucket of concurrency per downstream app, so a slow/overloaded
 # ingestion-service can't also starve calls to approval-agent (or vice versa) by consuming all of
 # the gateway's outbound capacity. Full is a fast, explicit 503, not an unbounded queue.
 _BULKHEAD_LIMIT = int(os.getenv("BULKHEAD_MAX_CONCURRENT_PER_SERVICE", "20"))
@@ -211,7 +211,7 @@ _SUBMIT_EXAMPLE = {
     tags=["Submissions"],
     summary="Submit an expense/invoice",
     description="Requires role submitter or admin. Forwarded to ingestion-service, which "
-    "validates the payload and returns 202 immediately with a tracking id (F1).",
+    "validates the payload and returns 202 immediately with a tracking id.",
     openapi_extra={
         "requestBody": {
             "content": {"application/json": {"example": _SUBMIT_EXAMPLE}},
@@ -228,7 +228,7 @@ async def submit(request: Request, user: dict = Depends(auth.require_role("submi
     "/escalations",
     tags=["Escalations"],
     summary="List the approver queue",
-    description="Requires role approver or admin. Only items the system escalated (F4).",
+    description="Requires role approver or admin. Only items the system escalated.",
 )
 @limiter.limit("120/minute")
 async def list_escalations(request: Request, user: dict = Depends(auth.require_role("approver", "admin"))):
@@ -239,7 +239,7 @@ async def list_escalations(request: Request, user: dict = Depends(auth.require_r
     "/escalations/{tracking_id}/decide",
     tags=["Escalations"],
     summary="Approve, reject, or request info",
-    description="Requires role approver or admin (F5).",
+    description="Requires role approver or admin.",
     openapi_extra={
         "requestBody": {
             "content": {
@@ -264,7 +264,7 @@ async def decide_escalation(
     tags=["Escalations"],
     summary="Submitter answers a request_info",
     description="Requires role submitter or admin — resumes the item back into the approver "
-    "queue (F5).",
+    "queue.",
     openapi_extra={
         "requestBody": {
             "content": {
@@ -286,7 +286,7 @@ async def provide_escalation_info(
     "/status/{tracking_id}",
     tags=["Status"],
     summary="Check a submission's status",
-    description="Any authenticated role. A plain-language stage + reason (F2).",
+    description="Any authenticated role. A plain-language stage + reason.",
 )
 @limiter.limit("120/minute")
 async def get_status(tracking_id: str, request: Request, user: dict = Depends(auth.get_current_user)):

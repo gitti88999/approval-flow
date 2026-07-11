@@ -6,7 +6,7 @@ import requests
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# NOTE: stale since the gateway (M6) and auth (N1) were added — ingestion-service is no longer
+# NOTE: stale since the gateway and auth were added — ingestion-service is no longer
 # host-exposed, and /submit now requires a Bearer token. This URL/payload need updating (point at
 # the gateway, log in first, attach Authorization header) before this script will work again.
 URL = "http://ingestion-service-dapr:8000/submit"

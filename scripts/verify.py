@@ -1,4 +1,4 @@
-"""One-command verification (D5): runs the four worked journeys plus the anti-cheese guards
+"""One-command verification: runs the four worked journeys plus the anti-cheese guards
 against a live stack and prints a pass/fail report. Exits non-zero on any failure.
 
 Assumes the stack is already reachable at GATEWAY_URL (default http://localhost:8000) — bring
