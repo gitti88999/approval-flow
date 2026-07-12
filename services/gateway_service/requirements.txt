@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+httpx
+requests
+slowapi
+pyjwt
+bcrypt
+pytest
+pytest-asyncio

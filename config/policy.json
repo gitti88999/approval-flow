@@ -1,0 +1,27 @@
+{
+  "metadata": { "version": "1.0", "last_updated": "2026-07-02" },
+  "autonomy_settings": {
+    "ceiling_usd": 250,
+    "confidence_threshold": 0.80,
+    "hard_stops": ["GLOBAL-VENDOR", "GLOBAL-FX", "GLOBAL-MATH", "GLOBAL-FRAUD", "GLOBAL-RECEIPT"]
+  },
+  "rules": {
+    "MEAL-01": { 
+      "limit": 75, 
+      "fields": ["attendee_count"], 
+      "description": "Personal/team meals reimbursable up to $75/attendee. Missing attendee count = missing info." 
+    },
+    "MEAL-02": { 
+      "limit": 500, 
+      "fields": ["business_justification", "client_name"], 
+      "description": "Client entertainment over $500 requires business justification and client name." 
+    },
+    "MEAL-03": { "reimbursable": false, "description": "Alcohol-only receipts are not reimbursable." },
+    "TRAVEL-01": { "description": "Economy flights, standard hotels, and standard/economy ground transport are eligible." },
+    "TRAVEL-02": { "limit": 1500, "action": "human_approval", "description": "Travel over $1,500 requires manager approval." },
+    "TRAVEL-03": { "action": "human_approval", "description": "First/business-class travel always requires approval." },
+    "SAAS-01": { "limit": 200, "description": "Subscriptions are policy-eligible up to $200 / month." },
+    "HW-01": { "limit": 1000, "description": "Hardware purchases are policy-eligible up to $1,000." },
+    "HW-02": { "limit": 1000, "action": "human_approval", "description": "Hardware over $1,000 is a Capital expense — always human-approved." }
+  }
+}

@@ -1,0 +1,24 @@
+# Overlay for running ApprovalFlow from prebuilt GHCR images instead of building locally —
+# what the CD pipeline (.github/workflows/cd.yml) publishes on every green CI run on main/dev.
+#
+# Usage:
+#   IMAGE_OWNER=<github-owner-lowercase> IMAGE_TAG=<branch-or-sha-tag> \
+#     docker compose -f docker-compose.yml -f docker-compose.images.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.images.yml up -d --no-build
+#
+# IMAGE_TAG is whatever cd.yml published: a branch name (e.g. "main") or "sha-<commit>".
+services:
+  ingestion-service:
+    image: ghcr.io/${IMAGE_OWNER}/approvalflow-ingestion-service:${IMAGE_TAG:-main}
+
+  approval-agent:
+    image: ghcr.io/${IMAGE_OWNER}/approvalflow-approval-agent:${IMAGE_TAG:-main}
+
+  payment-service:
+    image: ghcr.io/${IMAGE_OWNER}/approvalflow-payment-service:${IMAGE_TAG:-main}
+
+  gateway-service:
+    image: ghcr.io/${IMAGE_OWNER}/approvalflow-gateway-service:${IMAGE_TAG:-main}
+
+  ui:
+    image: ghcr.io/${IMAGE_OWNER}/approvalflow-ui:${IMAGE_TAG:-main}

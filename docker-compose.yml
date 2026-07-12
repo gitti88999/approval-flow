@@ -1,0 +1,172 @@
+services:
+  redis:
+    image: "redis:alpine"
+    restart: unless-stopped
+    networks:
+      - approval-network
+
+  redis-init:
+    image: "redis:alpine"
+    networks:
+      - approval-network
+    depends_on:
+      - redis
+    command: >
+      sh -c "until redis-cli -h redis ping | grep -q PONG; do sleep 1; done;
+             redis-cli -h redis SET config-policy_rules '{\"autonomy_settings\": {\"ceiling_usd\": 250, \"confidence_threshold\": 0.80, \"hard_stops\": [\"GLOBAL-VENDOR\", \"GLOBAL-FX\", \"GLOBAL-MATH\", \"GLOBAL-FRAUD\", \"GLOBAL-RECEIPT\"]}, \"rules\": {\"MEAL-01\": {\"limit\": 75, \"fields\": [\"attendee_count\"], \"description\": \"Personal/team meals reimbursable up to \$75/attendee.\"}, \"MEAL-02\": {\"limit\": 500, \"fields\": [\"business_justification\", \"client_name\"], \"description\": \"Client entertainment over \$500 requires justification.\"}, \"TRAVEL-01\": {\"description\": \"Economy flights, standard hotels, and standard ground transport are eligible.\"}, \"TRAVEL-02\": {\"limit\": 1500, \"action\": \"human_approval\", \"description\": \"Travel over \$1,500 requires manager approval.\"}, \"TRAVEL-03\": {\"action\": \"human_approval\", \"description\": \"First/business-class travel always requires approval.\"}, \"SAAS-01\": {\"limit\": 200, \"description\": \"Subscriptions eligible up to \$200/month.\"}, \"HW-01\": {\"limit\": 1000, \"description\": \"Hardware purchases eligible up to \$1,000.\"}, \"HW-02\": {\"limit\": 1000, \"action\": \"human_approval\", \"description\": \"Hardware over \$1,000 is Capital expense.\"}}}'"
+  ingestion-service:
+    build: ./services/ingestion_service
+    restart: unless-stopped
+    networks:
+      - approval-network
+    depends_on:
+      - redis
+
+  ingestion-service-dapr:
+    image: "daprio/daprd:1.11.0"
+    restart: unless-stopped
+    command: [
+      "./daprd",
+      "-app-id", "ingestion_service",
+      "-app-port", "8000",
+      "-app-channel-address", "ingestion-service",
+      "-dapr-http-port", "3500",
+      "-components-path", "/components",
+      "-config", "/components/tracing-config.yaml"
+    ]
+    volumes:
+      - ./dapr/components:/components
+    networks:
+      - approval-network
+    depends_on:
+      - ingestion-service
+
+  approval-agent:
+    build: ./services/approval_agent
+    restart: unless-stopped
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
+      - DAPR_HTTP_HOST=approval-agent-dapr
+      - DAPR_HTTP_PORT=3500
+    networks:
+      - approval-network
+    depends_on:
+      - redis
+      - redis-init
+
+  approval-agent-dapr:
+    image: "daprio/daprd:1.11.0"
+    restart: unless-stopped
+    environment:
+      # Read by the "local.env" Dapr secret store — the secret store reads from the sidecar
+      # process's own environment, not the app container's, so it's set here rather than above.
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    command: [
+      "./daprd",
+      "-app-id", "approval-agent",
+      "-app-port", "8001",
+      "-app-channel-address", "approval-agent",
+      "-dapr-http-port", "3500",
+      "-components-path", "/components",
+      "-config", "/components/tracing-config.yaml"
+    ]
+    volumes:
+      - ./dapr/components:/components
+    networks:
+      - approval-network
+    depends_on:
+      - approval-agent
+
+  payment-service:
+    build: ./services/payment_service
+    restart: unless-stopped
+    networks:
+      - approval-network
+    depends_on:
+      - redis
+      - redis-init
+
+  payment-service-dapr:
+    image: "daprio/daprd:1.11.0"
+    restart: unless-stopped
+    command: [
+      "./daprd",
+      "-app-id", "payment-service",
+      "-app-port", "8002",
+      "-app-channel-address", "payment-service",
+      "-dapr-http-port", "3500",
+      "-components-path", "/components",
+      "-config", "/components/tracing-config.yaml"
+    ]
+    volumes:
+      - ./dapr/components:/components
+    networks:
+      - approval-network
+    depends_on:
+      - payment-service
+
+  gateway-service:
+    build: ./services/gateway_service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DAPR_RUNTIME_HOST=gateway-dapr
+      - DAPR_HTTP_PORT=3500
+      - DEFAULT_ADMIN_USERNAME=${DEFAULT_ADMIN_USERNAME:-admin}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin123}
+    networks:
+      - approval-network
+    depends_on:
+      - ingestion-service
+      - approval-agent
+
+  gateway-dapr:
+    image: "daprio/daprd:1.11.0"
+    restart: unless-stopped
+    environment:
+      # Read by the "local.env" Dapr secret store, same pattern as GROQ_API_KEY on
+      # approval-agent-dapr — the secret store reads the sidecar's own environment.
+      - JWT_SECRET=${JWT_SECRET}
+    command: [
+      "./daprd",
+      "-app-id", "gateway",
+      "-app-port", "8000",
+      "-app-channel-address", "gateway-service",
+      "-dapr-http-port", "3500",
+      "-components-path", "/components",
+      "-config", "/components/tracing-config.yaml"
+    ]
+    volumes:
+      - ./dapr/components:/components
+    networks:
+      - approval-network
+    depends_on:
+      - gateway-service
+
+  ui:
+    build:
+      context: ./services/ui
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    networks:
+      - approval-network
+    depends_on:
+      - gateway-service
+
+  jaeger:
+    image: "jaegertracing/all-in-one:1.57"
+    restart: unless-stopped
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"
+    networks:
+      - approval-network
+
+networks:
+  approval-network:
+    driver: bridge

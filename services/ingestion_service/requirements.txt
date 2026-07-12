@@ -1,0 +1,7 @@
+fastapi==0.111.0
+uvicorn==0.30.1
+pydantic==2.7.4
+requests==2.32.3
+slowapi==0.1.9
+pytest
+pytest-asyncio

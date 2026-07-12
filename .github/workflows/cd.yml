@@ -1,0 +1,118 @@
+name: CD
+
+# Runs only after CI (lint + tests + compose build validation) has passed on main/dev — a red
+# CI run never produces or publishes an image. Triggered by CI's completion rather than by push
+# directly, so this workflow never duplicates CI's own checks.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: ["main", "dev"]
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - dir: ingestion_service
+            name: ingestion-service
+          - dir: approval_agent
+            name: approval-agent
+          - dir: payment_service
+            name: payment-service
+          - dir: gateway_service
+            name: gateway-service
+          - dir: ui
+            name: ui
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Lowercase the image owner (GHCR requires lowercase repo paths)
+        id: owner
+        run: echo "lc=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./services/${{ matrix.dir }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/approvalflow-${{ matrix.name }}:${{ github.event.workflow_run.head_branch }}
+            ${{ env.REGISTRY }}/${{ steps.owner.outputs.lc }}/approvalflow-${{ matrix.name }}:sha-${{ github.event.workflow_run.head_sha }}
+
+  smoke-test:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Lowercase the image owner
+        id: owner
+        run: echo "lc=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write a CI .env (stub LLM, no real secrets needed)
+        run: |
+          cat > .env <<EOF
+          GROQ_API_KEY=dummy-key-for-ci
+          LLM_PROVIDER=stub
+          JWT_SECRET=ci-smoke-test-secret
+          DEFAULT_ADMIN_USERNAME=admin
+          DEFAULT_ADMIN_PASSWORD=admin123
+          EOF
+
+      - name: Pull the just-published images (proves they're actually deployable, not just buildable)
+        env:
+          IMAGE_OWNER: ${{ steps.owner.outputs.lc }}
+          IMAGE_TAG: sha-${{ github.event.workflow_run.head_sha }}
+        run: docker compose -f docker-compose.yml -f docker-compose.images.yml pull
+
+      - name: Start the stack from the pulled images only (no local build)
+        env:
+          IMAGE_OWNER: ${{ steps.owner.outputs.lc }}
+          IMAGE_TAG: sha-${{ github.event.workflow_run.head_sha }}
+        run: docker compose -f docker-compose.yml -f docker-compose.images.yml up -d --no-build
+
+      - name: Wait for the gateway to report healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health; then exit 0; fi
+            sleep 2
+          done
+          echo "gateway never became healthy" >&2
+          exit 1
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.images.yml logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.images.yml down -v
