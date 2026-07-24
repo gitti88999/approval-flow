@@ -18,15 +18,18 @@ def _resp(status_code=204, body=None, etag=None):
 
 def test_save_escalation_persists_record_and_enqueues():
     queue_get = _resp(200, [], etag="1")
-    with patch("services.approval_agent.escalation.requests.get", return_value=queue_get) as mock_get, \
+    index_get = _resp(200, [], etag="1")
+    with patch("services.approval_agent.escalation.requests.get", side_effect=[queue_get, index_get]) as mock_get, \
          patch("services.approval_agent.escalation.requests.post", return_value=_resp(204)) as mock_post:
         escalation.save_escalation("T1", {"total": 100}, "human_review", "over ceiling", 1.0)
 
-    # first POST persists the escalation record, second persists the updated queue
-    assert mock_post.call_count == 2
-    record_call, queue_call = mock_post.call_args_list
+    # first POST persists the escalation record, second persists the updated queue,
+    # third persists the durable index.
+    assert mock_post.call_count == 3
+    record_call, queue_call, index_call = mock_post.call_args_list
     assert record_call.kwargs["json"][0]["key"] == "escalation:T1"
     assert queue_call.kwargs["json"][0]["value"] == ["T1"]
+    assert index_call.kwargs["json"][0]["value"] == ["T1"]
 
 
 def test_list_open_escalations_filters_by_status():
