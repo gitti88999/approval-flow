@@ -6,5 +6,6 @@ spec:
   pubsubname: invoice-pubsub
   topic: submitted-invoices
   route: /events/invoice-submissions
+  deadLetterTopic: submitted-invoices-dlq
 scopes:
   - approval-agent

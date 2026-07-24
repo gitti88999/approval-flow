@@ -79,6 +79,17 @@ async def subscribe():
     ]
 
 
+@app.post("/events/dlq", status_code=status.HTTP_200_OK)
+async def handle_dead_letter_event(request: Request):
+    """Minimal DLQ sink: logs poison-pill messages that eventually land in the dead-letter topic."""
+    try:
+        event_envelope = await request.json()
+    except Exception:
+        event_envelope = {}
+    logger.warning("[Agent DLQ] Received dead-letter event: %s", event_envelope)
+    return {"status": "ACCEPTED"}
+
+
 @app.post("/events/payment-outcome", status_code=status.HTTP_200_OK)
 async def handle_payment_outcome(request: Request):
     """Records the payment service's final outcome so GET /status can report it."""
@@ -101,78 +112,82 @@ async def handle_payment_outcome(request: Request):
 
 @app.post("/events/invoice-submissions", status_code=status.HTTP_200_OK)
 async def handle_invoice_event(request: Request):
-    event_envelope = await request.json()
-    event_data = event_envelope.get("data", {})
+    try:
+        event_envelope = await request.json()
+        event_data = event_envelope.get("data", {})
 
-    invoice = event_data.get("invoice", event_data) if isinstance(event_data, dict) else event_data
-    tracking_id = event_data.get("tracking_id", event_envelope.get("id", "UNKNOWN-ID"))
-    set_correlation_id(tracking_id)
+        invoice = event_data.get("invoice", event_data) if isinstance(event_data, dict) else event_data
+        tracking_id = event_data.get("tracking_id", event_envelope.get("id", "UNKNOWN-ID"))
+        set_correlation_id(tracking_id)
 
-    logger.info(f"[Agent Router] Received event: {event_envelope}")
-    logger.info("[Agent Router] Digested Payload")
+        logger.info(f"[Agent Router] Received event: {event_envelope}")
+        logger.info("[Agent Router] Digested Payload")
 
-    # N4 — nests this span (and, transitively, the LLM call span agent.py creates) under the
-    # same distributed trace Dapr started for this pub/sub delivery, so the whole submit ->
-    # evaluate -> pay journey shows up as one trace in Jaeger, tagged with our correlation id.
-    parent_ctx = extract_context(event_envelope.get("traceparent"))
-    with tracer.start_as_current_span("handle_invoice_submission", context=parent_ctx) as span:
-        span.set_attribute("correlation_id", tracking_id)
-        evaluation_result = agent.process_invoice_evaluation(invoice, tracking_id)
+        # N4 — nests this span (and, transitively, the LLM call span agent.py creates) under the
+        # same distributed trace Dapr started for this pub/sub delivery, so the whole submit ->
+        # evaluate -> pay journey shows up as one trace in Jaeger, tagged with our correlation id.
+        parent_ctx = extract_context(event_envelope.get("traceparent"))
+        with tracer.start_as_current_span("handle_invoice_submission", context=parent_ctx) as span:
+            span.set_attribute("correlation_id", tracking_id)
+            evaluation_result = agent.process_invoice_evaluation(invoice, tracking_id)
 
-        state_item = {
-            "key": f"invoice_evaluation:{tracking_id}",
-            "value": {
-                "tracking_id": tracking_id,
-                "recommendation": evaluation_result.get("recommendation", "human_review"),
-                "reason": evaluation_result.get("reason", ""),
-                "confidence": evaluation_result.get("confidence"),
-            },
-        }
+            state_item = {
+                "key": f"invoice_evaluation:{tracking_id}",
+                "value": {
+                    "tracking_id": tracking_id,
+                    "recommendation": evaluation_result.get("recommendation", "human_review"),
+                    "reason": evaluation_result.get("reason", ""),
+                    "confidence": evaluation_result.get("confidence"),
+                },
+            }
 
-        if evaluation_result.get("recommendation") == "approve":
-            # Outbox pattern: persist the evaluation and the payment-required event in one
-            # atomic Dapr state transaction, so the intent to publish can never be silently lost
-            # even if the direct publish below fails or the process dies — the background
-            # dispatcher will still deliver it. Previously this was a plain "save state, then
-            # publish" pair: if the publish call failed, the evaluation was already marked
-            # approved with no record that payment was ever supposed to happen — a real, silent
-            # lost-money bug.
-            try:
-                outbox.enqueue_with_state(
-                    [state_item],
-                    "invoice-pubsub",
-                    "payment-required",
-                    {"tracking_id": tracking_id, "invoice": invoice},
-                )
-                logger.info(f"[Agent Router] Persisted evaluation and enqueued payment-required for TrackingID: {tracking_id}")
-            except outbox.OutboxError as e:
-                logger.error(f"[Agent Router] Failed to persist evaluation/outbox for TrackingID: {tracking_id}: {e}")
-        else:
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.post(DAPR_STATE_URL, json=[state_item])
-                    if response.status_code in [200, 204]:
-                        logger.info(f"[Agent DB] Successfully persisted evaluation for TrackingID: {tracking_id}")
-                    else:
-                        logger.error(f"[Agent DB] Failed. Status: {response.status_code}, Response: {response.text}")
-            except Exception as e:
-                logger.error(f"[Agent DB] Error: {str(e)}")
+            if evaluation_result.get("recommendation") == "approve":
+                # Outbox pattern: persist the evaluation and the payment-required event in one
+                # atomic Dapr state transaction, so the intent to publish can never be silently lost
+                # even if the direct publish below fails or the process dies — the background
+                # dispatcher will still deliver it. Previously this was a plain "save state, then
+                # publish" pair: if the publish call failed, the evaluation was already marked
+                # approved with no record that payment was ever supposed to happen — a real, silent
+                # lost-money bug.
+                try:
+                    outbox.enqueue_with_state(
+                        [state_item],
+                        "invoice-pubsub",
+                        "payment-required",
+                        {"tracking_id": tracking_id, "invoice": invoice},
+                    )
+                    logger.info(f"[Agent Router] Persisted evaluation and enqueued payment-required for TrackingID: {tracking_id}")
+                except outbox.OutboxError as e:
+                    logger.error(f"[Agent Router] Failed to persist evaluation/outbox for TrackingID: {tracking_id}: {e}")
+            else:
+                try:
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(DAPR_STATE_URL, json=[state_item])
+                        if response.status_code in [200, 204]:
+                            logger.info(f"[Agent DB] Successfully persisted evaluation for TrackingID: {tracking_id}")
+                        else:
+                            logger.error(f"[Agent DB] Failed. Status: {response.status_code}, Response: {response.text}")
+                except Exception as e:
+                    logger.error(f"[Agent DB] Error: {str(e)}")
 
-            # Anything the agent doesn't clear for auto-approval pauses here for a human — the
-            # agent never auto-rejects on its own; a human makes the final call.
-            try:
-                escalation.save_escalation(
-                    tracking_id,
-                    invoice,
-                    evaluation_result.get("recommendation", "human_review"),
-                    evaluation_result.get("reason", ""),
-                    evaluation_result.get("confidence", 0.0),
-                )
-                logger.info(f"[Agent Router] Escalated TrackingID: {tracking_id} for human review")
-            except escalation.EscalationError as e:
-                logger.error(f"[Agent Router] Failed to escalate TrackingID: {tracking_id}: {e}")
+                # Anything the agent doesn't clear for auto-approval pauses here for a human — the
+                # agent never auto-rejects on its own; a human makes the final call.
+                try:
+                    escalation.save_escalation(
+                        tracking_id,
+                        invoice,
+                        evaluation_result.get("recommendation", "human_review"),
+                        evaluation_result.get("reason", ""),
+                        evaluation_result.get("confidence", 0.0),
+                    )
+                    logger.info(f"[Agent Router] Escalated TrackingID: {tracking_id} for human review")
+                except escalation.EscalationError as e:
+                    logger.error(f"[Agent Router] Failed to escalate TrackingID: {tracking_id}: {e}")
 
-    return {"status": "SUCCESS"}
+        return {"status": "SUCCESS"}
+    except Exception as exc:
+        logger.exception(f"[Agent Router] Unhandled exception while processing invoice submission for TrackingID {tracking_id if 'tracking_id' in locals() else 'UNKNOWN'}")
+        return {"status": "DROP"}
 
 
 class EscalationDecision(BaseModel):

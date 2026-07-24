@@ -6,7 +6,15 @@ spec:
   type: pubsub.redis
   version: v1
   metadata:
-  - name: redisHost
-    value: redis:6379
-  - name: redisPassword
-    value: ""
+    - name: redisHost
+      value: redis:6379
+    - name: redisPassword
+      value: ""
+    - name: processingTimeout
+      value: "30s"
+    - name: redeliverInterval
+      value: "5s"
+    - name: maxRetryCount
+      value: "3"
+    - name: deadLetterTopic
+      value: "submitted-invoices-dlq"

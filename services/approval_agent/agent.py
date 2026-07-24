@@ -1,6 +1,7 @@
 import json
 import logging
 import requests
+from pydantic import BaseModel, Field, ValidationError
 
 try:
     from .config import settings
@@ -12,6 +13,12 @@ except ImportError:
     import policy_rag
 
 logger = logging.getLogger(__name__)
+
+
+class InvoiceEvaluationResult(BaseModel):
+    recommendation: str = Field(..., pattern=r"^(approve|reject|human_review)$")
+    reason: str = Field(..., min_length=1)
+    confidence: float = Field(..., ge=0.0, le=1.0)
 
 def validate_hard_stops(invoice: dict, policy: dict) -> str | None:
     hard_stops = policy.get("autonomy_settings", {}).get("hard_stops", [])
@@ -155,15 +162,22 @@ def process_invoice_evaluation(invoice: dict, tracking_id: str) -> dict:
         with tracer.start_as_current_span("llm.evaluate") as span:
             span.set_attribute("correlation_id", tracking_id)
             span.set_attribute("llm.provider", provider.__class__.__name__)
-            result = provider.evaluate(system_prompt, invoice)
-            span.set_attribute("llm.recommendation", str(result.get("recommendation")))
+            raw_result = provider.evaluate(system_prompt, invoice)
+            span.set_attribute("llm.recommendation", str(raw_result))
 
-        recommendation = result.get('recommendation', 'unknown').lower()
-        reason = result.get('reason', 'no reason provided')
         try:
-            confidence = float(result.get("confidence", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            confidence = 0.0
+            if isinstance(raw_result, str):
+                parsed_result = json.loads(raw_result)
+            else:
+                parsed_result = raw_result
+            validated_result = InvoiceEvaluationResult.model_validate(parsed_result)
+        except ValidationError as exc:
+            logger.error(f"[Agent] LLM output failed schema validation for TrackingID {tracking_id}: {exc}")
+            return {"recommendation": "human_review", "reason": "Schema validation failed", "confidence": 0.0}
+
+        recommendation = validated_result.recommendation.lower()
+        reason = validated_result.reason
+        confidence = float(validated_result.confidence)
         confidence_threshold = policy.get("autonomy_settings", {}).get("confidence_threshold", 0.8)
 
         # Post-AI Guardrails: the LLM only recommends, the router has the final say.
