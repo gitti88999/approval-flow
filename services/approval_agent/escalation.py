@@ -17,6 +17,7 @@ DAPR_BASE_URL = f"http://{settings.dapr_http_host}:{settings.dapr_http_port}/v1.
 DAPR_STATE_URL = f"{DAPR_BASE_URL}/state/statestore"
 
 QUEUE_KEY = "escalation_queue"
+INDEX_KEY = "escalation_index"
 OPEN_STATUSES = {"pending", "info_requested"}
 
 
@@ -53,8 +54,25 @@ def _get_queue():
     return [], None
 
 
+def _get_index():
+    """Returns (index_list, etag). etag is None if the key has never been written."""
+    response = requests.get(f"{DAPR_STATE_URL}/{INDEX_KEY}", timeout=5)
+    if response.status_code == 200 and response.text.strip():
+        return response.json(), response.headers.get("ETag")
+    return [], None
+
+
 def _save_queue(queue: List[str], etag: Optional[str]) -> bool:
     item = {"key": QUEUE_KEY, "value": queue}
+    if etag:
+        item["etag"] = etag
+        item["options"] = {"concurrency": "first-write"}
+    response = requests.post(DAPR_STATE_URL, json=[item], timeout=5)
+    return response.status_code in (200, 204)
+
+
+def _save_index(index: List[str], etag: Optional[str]) -> bool:
+    item = {"key": INDEX_KEY, "value": index}
     if etag:
         item["etag"] = etag
         item["options"] = {"concurrency": "first-write"}
@@ -72,6 +90,16 @@ def _mutate_queue(mutate_fn: Callable[[List[str]], List[str]], attempts: int = 5
     raise EscalationError("Failed to update escalation queue after repeated write conflicts")
 
 
+def _mutate_index(mutate_fn: Callable[[List[str]], List[str]], attempts: int = 5) -> None:
+    """Applies mutate_fn under optimistic concurrency, retrying if another writer raced us."""
+    for _ in range(attempts):
+        index, etag = _get_index()
+        if _save_index(mutate_fn(list(index)), etag):
+            return
+        time.sleep(0.05)
+    raise EscalationError("Failed to update escalation index after repeated write conflicts")
+
+
 def save_escalation(tracking_id: str, invoice: dict, recommendation: str, reason: str, confidence: float) -> None:
     """Pauses the workflow: records the agent's rationale and adds the item to the approver queue."""
     record = {
@@ -84,6 +112,11 @@ def save_escalation(tracking_id: str, invoice: dict, recommendation: str, reason
     }
     _save_escalation(tracking_id, record)
     _mutate_queue(lambda q: q if tracking_id in q else q + [tracking_id])
+    # Keep a durable index of all escalations so an admin can list history.
+    try:
+        _mutate_index(lambda idx: idx if tracking_id in idx else idx + [tracking_id])
+    except Exception:
+        logger.exception("Failed to update escalation index for %s", tracking_id)
 
 
 def list_open_escalations() -> List[dict]:
@@ -93,6 +126,17 @@ def list_open_escalations() -> List[dict]:
     for tracking_id in queue:
         record = get_escalation(tracking_id)
         if record and record.get("status") in OPEN_STATUSES:
+            items.append(record)
+    return items
+
+
+def list_all_escalations() -> List[dict]:
+    """Returns all escalation records (open and resolved) using the durable index."""
+    index, _ = _get_index()
+    items = []
+    for tracking_id in index:
+        record = get_escalation(tracking_id)
+        if record:
             items.append(record)
     return items
 

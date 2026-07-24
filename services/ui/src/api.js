@@ -66,6 +66,8 @@ export const getStatus = (trackingId) => request(`/status/${trackingId}`)
 
 export const listEscalations = () => request('/escalations')
 
+export const listAllEscalations = () => request('/escalations/all')
+
 export const decideEscalation = (trackingId, decision) =>
   request(`/escalations/${trackingId}/decide`, { method: 'POST', body: JSON.stringify(decision) })
 

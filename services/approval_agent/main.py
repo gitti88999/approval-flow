@@ -207,6 +207,10 @@ async def get_escalations():
     return escalation.list_open_escalations()
 
 
+@app.get("/escalations/all")
+async def get_all_escalations():
+    """Admin-only: returns all escalations (open and resolved)."""
+    return escalation.list_all_escalations()
 @app.post("/escalations/{tracking_id}/decide")
 async def decide_escalation(tracking_id: str, decision: EscalationDecision):
     """F5 — approve, reject, or send back for more info in one action."""

@@ -235,6 +235,17 @@ async def list_escalations(request: Request, user: dict = Depends(auth.require_r
     return await invoke(APPROVAL_AGENT_APP_ID, "escalations", request)
 
 
+@app.get(
+    "/escalations/all",
+    tags=["Escalations"],
+    summary="List all escalations (admin)",
+    description="Admin-only: returns all escalations, open and resolved.",
+)
+@limiter.limit("60/minute")
+async def list_all_escalations(request: Request, user: dict = Depends(auth.require_role("admin"))):
+    return await invoke(APPROVAL_AGENT_APP_ID, "escalations/all", request)
+
+
 @app.post(
     "/escalations/{tracking_id}/decide",
     tags=["Escalations"],
